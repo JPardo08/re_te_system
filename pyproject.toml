@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "re-te-system"
+version = "0.1.0"
+description = "Reproducible Paper 3 relation extraction system"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+mrebel = [
+  "sentencepiece>=0.2,<0.3",
+  "torch>=2.2",
+  "transformers>=4.40,<5",
+]
+dev = ["pytest>=8,<9"]
+
+[project.scripts]
+re-te-system = "re_te_system.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/re_te_system"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
