@@ -22,20 +22,35 @@ Future C0–C3 comparisons will use one controlled model to study target-schema
 conditioning. Differences between these external baselines are not evidence of
 a C0→C3 conditioning effect.
 
-## Install and test
+## Development environment
 
-Core and mock execution have no runtime dependencies:
+The canonical development environment is Python 3.12 in the globally stored
+Conda named environment `re_te_system_312`. The package continues to support
+Python 3.11 or newer.
 
 ```bash
-python -m pip install -e ".[dev]"
+conda create -n re_te_system_312 python=3.12 -y
+conda activate re_te_system_312
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev,mrebel]"
 pytest
 ```
 
-Enable either real baseline separately:
+Hugging Face model files can be stored in a repository-local, unversioned
+cache:
 
 ```bash
-python -m pip install -e ".[mrebel]"
-python -m pip install -e ".[rebel]"
+export HF_HOME="$PWD/.cache/huggingface"
+```
+
+Core and mock execution have no runtime dependencies. For development without
+ML dependencies, use `python -m pip install -e ".[dev]"`. The semantically
+distinct `mrebel` and `rebel` extras currently declare the same ML dependency
+set and can be combined with `dev` independently:
+
+```bash
+python -m pip install -e ".[dev,mrebel]"
+python -m pip install -e ".[dev,rebel]"
 ```
 
 Use `--extractor rebel-mock` for the dependency-free REBEL contract fixture, or
