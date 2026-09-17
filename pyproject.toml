@@ -16,6 +16,11 @@ mrebel = [
   "torch>=2.2",
   "transformers>=4.40,<5",
 ]
+rebel = [
+  "sentencepiece>=0.2,<0.3",
+  "torch>=2.2",
+  "transformers>=4.40,<5",
+]
 dev = ["pytest>=8,<9"]
 
 [project.scripts]

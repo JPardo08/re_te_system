@@ -57,3 +57,30 @@ The audited `scripts/mrebel_extractor.py` was last changed at
 - Beam-search defaults and seed setup — **ADAPTED** as explicit serialized
   configuration. P0 does not claim a seed affects deterministic non-sampling
   generation.
+
+## TFG Hugo REBEL baseline
+
+Audited at the same repository revision
+`05a563234b283d48a1b19740d45261d7541d93f0`.
+
+- `scripts/rebel_extractor.py:extract_triplets` — **REIMPLEMENTED** as a
+  dedicated deterministic parser for
+  `<triplet> subject <subj> object <obj> relation`. The new parser preserves
+  duplicates and reports malformed, truncated, and empty output.
+- `scripts/rebel_extractor.py:run_corpus` — **REFERENCE_ONLY**. Its pandas/CSV
+  loop, silent input truncation, default deduplication, and final-only output
+  were not migrated.
+- `MODEL_NAME`, `INPUT_MAX_LENGTH`, `GEN_MAX_LENGTH`, and `NUM_BEAMS` —
+  **ADAPTED** as explicit defaults: `Babelscape/rebel-large`, 256 input tokens,
+  generation `max_length=512`, and three deterministic beams.
+- Model-config decoder start token — **ADAPTED**. No mREBEL source or target
+  language token is injected.
+- Random seed setup — **ADAPTED AS METADATA**. Non-sampling beam generation is
+  deterministic; P0.5 does not overstate the seed's effect.
+- Automatic CUDA selection — **ADAPTED** behind explicit `device` and `dtype`
+  manifest configuration.
+- Legacy duplicate removal — **NOT MIGRATED**.
+
+REBEL and mREBEL are documented only as external baselines. Neither supplies
+the controlled model needed for the future C0–C3 target-schema-conditioning
+experiment.

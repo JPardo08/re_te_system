@@ -35,3 +35,35 @@ class MockExtractor:
                 "truncated": False,
             },
         )
+
+
+@dataclass
+class MockRebelExtractor:
+    """REBEL-shaped deterministic fixture using the same extractor protocol."""
+
+    model_name: str = "mock/rebel-contract"
+    model_revision: str = "mock-rebel-v1"
+    outputs: dict[str, str] = field(default_factory=dict)
+    fail_on: set[str] = field(default_factory=set)
+
+    def extract(self, text: str, context: ExtractionContext) -> RawExtractionResult:
+        if context.input_id in self.fail_on:
+            raise RuntimeError("configured mock REBEL failure")
+        words = text.split()
+        subject = words[0] if words else ""
+        object_ = words[-1].rstrip(".,;:") if words else ""
+        output = self.outputs.get(
+            context.input_id,
+            f"<triplet> {subject} <subj> {object_} <obj> related to",
+        )
+        return RawExtractionResult(
+            model_output=output,
+            generation_metadata={
+                "deterministic": True,
+                "finish_reason": "mock_complete",
+                "input_token_count": len(words),
+                "number_of_sequences": 1,
+                "output_token_count": len(output.split()),
+                "truncated": False,
+            },
+        )

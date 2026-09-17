@@ -4,14 +4,23 @@ Reproducible Paper 3 extraction system. P0 implements the file-based pipeline
 `TEXT → RAW → PARSED → NORMALIZED → VALIDATED → prediction artifact → run
 manifest` without importing benchmark or evaluator Python packages.
 
-## Scientific C0
+## External baselines and scientific C0
 
-Primary `C0` is open mREBEL extraction. The model receives only document text,
-stable identifiers, and unavoidable mREBEL language/runtime formatting. It
-does not receive Gold labels, Hohfeld types, signatures, definitions, examples,
-ontologies, or relation aliases. mREBEL relations are never mapped to Hohfeld.
-The historical `REL_ALLOWED` list is disabled by default and is available only
-as an explicitly requested derived view.
+mREBEL and REBEL are external historical baselines with pretrained,
+Wikidata-style native relation schemas. Both run with target condition `C0`:
+the model receives document text but no Gold labels, Hohfeld types, signatures,
+definitions, examples, ontology, or relation aliases. Neither baseline maps
+native relations to Hohfeld.
+
+mREBEL is multilingual and receives the required `es_XX`/`tp_XX` runtime
+formatting. REBEL is English-centric/monolingual; Spanish text is passed
+directly, without translation or language tokens, as an intentional
+out-of-primary-model-scope baseline. They are not linguistically equivalent.
+The historical mREBEL `REL_ALLOWED` list remains disabled by default.
+
+Future C0–C3 comparisons will use one controlled model to study target-schema
+conditioning. Differences between these external baselines are not evidence of
+a C0→C3 conditioning effect.
 
 ## Install and test
 
@@ -22,11 +31,16 @@ python -m pip install -e ".[dev]"
 pytest
 ```
 
-Enable real inference separately:
+Enable either real baseline separately:
 
 ```bash
 python -m pip install -e ".[mrebel]"
+python -m pip install -e ".[rebel]"
 ```
+
+Use `--extractor rebel-mock` for the dependency-free REBEL contract fixture, or
+`--extractor rebel --local-files-only` for a cached real checkpoint. The latter
+defaults to `Babelscape/rebel-large` and never adds mREBEL language tokens.
 
 ## Mock document run
 

@@ -163,7 +163,17 @@ def test_mock_end_to_end_preserves_raw_and_contract(tmp_path: Path) -> None:
     assert record["raw"]["segments"][0]["model_output"] == exact
     assert record["parsed"][0]["relation"] == "employer"
     assert record["validated"]["status"] == "ok"
-    assert json.loads((run_dir / "manifest.json").read_text())["condition"] == "C0"
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+    assert manifest["condition"] == "C0"
+    assert manifest["run_role"] == "baseline"
+    assert manifest["model_family"] == "mrebel"
+    assert manifest["target_schema_knowledge"] == "none"
+    assert manifest["native_schema"] == {
+        "id": "wikidata_like",
+        "inherited_from_model": True,
+    }
+    assert manifest["input_language"] == "es"
+    assert manifest["language_status"] == "supported"
 
 
 def test_windowing_and_document_aggregation(tmp_path: Path) -> None:

@@ -11,6 +11,7 @@ from typing import Any, Callable, Iterable, Mapping
 from re_te_system.contracts import (
     ExtractionContext,
     InputRecord,
+    ParseResult,
     PREDICTION_CONTRACT_VERSION,
     Segment,
     triple_to_dict,
@@ -21,6 +22,9 @@ from re_te_system.manifests.run_manifest import build_manifest, canonical_json, 
 from re_te_system.normalization.basic import align_triples, normalize_triples
 from re_te_system.parsing.mrebel import parse_mrebel
 from re_te_system.validation.structural import validate_structural
+
+
+Parser = Callable[[str, str | None], ParseResult]
 
 
 @dataclass(frozen=True)
@@ -142,6 +146,13 @@ def run_pipeline(
     model_metadata: Mapping[str, Any] | None = None,
     condition: str = "C0",
     legacy_relation_filter: bool = False,
+    parse_output: Parser = parse_mrebel,
+    run_role: str = "baseline",
+    model_family: str = "mrebel",
+    target_schema_knowledge: str = "none",
+    native_schema: Mapping[str, Any] | None = None,
+    input_language: str = "es",
+    language_status: str = "supported",
     code_commit: str | None = None,
 ) -> Path:
     model = {
@@ -161,6 +172,13 @@ def run_pipeline(
         generation=generation,
         windowing=window_manifest,
         benchmark_source=benchmark_source,
+        run_role=run_role,
+        model_family=model_family,
+        target_schema_knowledge=target_schema_knowledge,
+        native_schema=native_schema
+        or {"id": "wikidata_like", "inherited_from_model": True},
+        input_language=input_language,
+        language_status=language_status,
         code_commit=code_commit,
     )
     run_dir = Path(output_root) / manifest["run_id"]
@@ -220,7 +238,7 @@ def run_pipeline(
                         "text": segment.text,
                     }
                 )
-                parsed = parse_mrebel(raw.model_output, segment.segment_id)
+                parsed = parse_output(raw.model_output, segment.segment_id)
                 aligned = align_triples(parsed.triples, segment.text, segment.start)
                 parsed_all.extend(aligned)
                 parse_issues.extend(parsed.issues)

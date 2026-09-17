@@ -62,6 +62,12 @@ def build_manifest(
     generation: Mapping[str, Any],
     windowing: Mapping[str, Any],
     benchmark_source: Mapping[str, Any],
+    run_role: str = "baseline",
+    model_family: str = "UNKNOWN",
+    target_schema_knowledge: str = "none",
+    native_schema: Mapping[str, Any] | None = None,
+    input_language: str = "es",
+    language_status: str = "UNKNOWN",
     code_commit: str | None = None,
 ) -> dict[str, Any]:
     software = {
@@ -75,10 +81,25 @@ def build_manifest(
         "conditioning": "none",
         "dataset": dict(dataset),
         "generation": dict(generation),
+        "input_language": input_language,
+        "language_status": language_status,
         "model": dict(model),
+        "model_family": model_family,
+        "model_name": model.get("name", "UNKNOWN"),
+        "model_revision": model.get("resolved_revision", "UNKNOWN"),
+        "native_schema": dict(
+            native_schema
+            or {"id": "UNKNOWN", "inherited_from_model": True}
+        ),
         "prediction_contract_version": PREDICTION_CONTRACT_VERSION,
+        "run_role": run_role,
         "run_manifest_version": RUN_MANIFEST_VERSION,
         "software": software,
+        "target_condition": {
+            "id": condition,
+            "target_schema_knowledge": target_schema_knowledge,
+        },
+        "target_schema_knowledge": target_schema_knowledge,
         "windowing": dict(windowing),
     }
     return {
