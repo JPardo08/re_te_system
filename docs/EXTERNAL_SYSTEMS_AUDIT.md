@@ -612,5 +612,13 @@ snapshot or its original decisions:
 - Weight-free clean-room test suite: passing.
 - Real-model smoke: blocked and unauthorized because the fine-tuned checkpoint
   has no explicit weight license.
+- UIE clean-room adapter, deterministic SSI builder, conservative SEL parser,
+  typed Spot-Association representation, exact alignment, and binary relation
+  projection: implemented.
+- UIE checkpoint/revision and CC BY-NC-SA metadata: pinned and documented.
+- UIE custom-schema interface: implemented; unseen-schema zero-shot scientific
+  support remains `UNKNOWN`.
+- UIE main-environment positive smoke: pending suitable GPU/native validation;
+  the legacy CPU empty-tree run is contract evidence only.
 
-See `PYTHIA_BASELINE.md` for the provenance gate and current technical policy.
+See `PYTHIA_BASELINE.md` and `UIE_BASELINE.md` for current technical policy.

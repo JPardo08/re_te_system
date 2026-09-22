@@ -33,9 +33,8 @@ configuration completeness but is not claimed as a source of determinism.
 
 ## External baseline profiles
 
-All external profiles use `run_role: baseline` and
-`target_schema_knowledge: none`. They are divided into two non-equivalent task
-families.
+All external profiles use `run_role: baseline`. They are divided into three
+non-equivalent task families; target-schema knowledge is profile-specific.
 
 ### Native Wikidata-like TE
 
@@ -81,8 +80,35 @@ The Pythia model metadata also records the pinned model/tokenizer revision,
 base model, clean-room prompt profile, model/effective input limits,
 quantization mode, prefix context, and whether remote download is authorized.
 
+### Dynamic structural-schema UIE
+
+UIE uses:
+
+```json
+{
+  "run_role": "baseline",
+  "model_family": "uie",
+  "task_class": "UNIVERSAL_IE",
+  "target_schema_knowledge": "structural_schema",
+  "controlled_experiment_condition": "not_applicable",
+  "input_language": "es",
+  "language_status": "out_of_documented_training_scope",
+  "native_schema": {
+    "inherited_from_model": false,
+    "scope": "dynamic_runtime_structural_schema"
+  }
+}
+```
+
+UIE model metadata records the pinned checkpoint/tokenizer, ordered spot and
+association labels, optional spot-to-association metadata, schema/SSI
+versions, schema hash, exact serialized SSI, generation/truncation settings,
+constraint status, and conservative parser policy. It also records
+`interface_accepts_custom_schema: true` separately from
+`zero_shot_unseen_schema_supported: unknown`.
+
 The backward-compatible `condition: C0`, `conditioning: none`, and
-`target_condition.id: C0` fields remain in the shared contract. For Pythia,
-they do **not** imply membership in the causal C0-C3 experiment.
-`controlled_experiment_condition: not_applicable` and
-`task_class: KBP_DOMAIN_BASELINE` are the authoritative classification fields.
+`target_condition.id: C0` fields remain in the shared contract. For Pythia and
+UIE, they do **not** imply membership in the causal C0-C3 experiment.
+`controlled_experiment_condition: not_applicable` and each `task_class` are
+the authoritative classification fields.

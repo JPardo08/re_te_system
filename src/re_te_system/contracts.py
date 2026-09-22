@@ -51,6 +51,26 @@ class ParsedTriple:
 
 
 @dataclass(frozen=True)
+class ParsedAssociation:
+    label: str
+    span: str
+    span_start: int | None = None
+    span_end: int | None = None
+    alignment_status: str = "not_attempted"
+
+
+@dataclass(frozen=True)
+class ParsedSpot:
+    label: str
+    span: str
+    associations: tuple[ParsedAssociation, ...] = ()
+    segment_id: str | None = None
+    span_start: int | None = None
+    span_end: int | None = None
+    alignment_status: str = "not_attempted"
+
+
+@dataclass(frozen=True)
 class ParseIssue:
     code: str
     message: str
@@ -62,6 +82,7 @@ class ParseIssue:
 class ParseResult:
     triples: tuple[ParsedTriple, ...]
     issues: tuple[ParseIssue, ...] = ()
+    structures: tuple[ParsedSpot, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -119,3 +140,24 @@ def triple_to_dict(triple: ParsedTriple) -> dict[str, Any]:
         if value[field_name] is None:
             del value[field_name]
     return value
+
+
+def spot_to_dict(spot: ParsedSpot) -> dict[str, Any]:
+    return {
+        "alignment_status": spot.alignment_status,
+        "associations": [
+            {
+                "alignment_status": association.alignment_status,
+                "label": association.label,
+                "span": association.span,
+                "span_end": association.span_end,
+                "span_start": association.span_start,
+            }
+            for association in spot.associations
+        ],
+        "label": spot.label,
+        "segment_id": spot.segment_id,
+        "span": spot.span,
+        "span_end": spot.span_end,
+        "span_start": spot.span_start,
+    }

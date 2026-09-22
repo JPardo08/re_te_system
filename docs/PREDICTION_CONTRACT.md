@@ -31,6 +31,14 @@ RDF-producing adapters may additionally preserve `subject_is_uri`,
 Parsed, normalized, and validated arrays are separate and duplicates retain
 their occurrence order.
 
+Structure-generating adapters may add `parsed_structures` and
+`aligned_structures`. UIE uses these fields for typed Spot-Association records
+before binary relation projection. Alignment status is explicit
+(`not_attempted`, `exact`, `ambiguous`, `not_found`, or `null`);
+missing/ambiguous offsets never remove a structure. Entity/event-only and null
+rejection structures remain in these fields and do not fabricate canonical
+triples.
+
 Violations have `code`, `severity` (`soft` or `hard`), message, and optional
 triple index. Status is `ok`, `soft_fail`, or `hard_fail`.
 

@@ -121,3 +121,44 @@ REBEL, mREBEL, and Pythia/SPACE-KBP are documented only as external baselines.
 REBEL/mREBEL are `END_TO_END_TE`; Pythia is a `KBP_DOMAIN_BASELINE`. None
 supplies the controlled model needed for the future C0–C3
 target-schema-conditioning experiment.
+
+## Universal-IE UIE
+
+Source repository `universal-ie/UIE` was audited read-only at revision
+`c88dd08b8ad0016ec597ebc6f8fff49480367bb2`. A separate legacy reproduction is
+documented in `_legacy/UIE/LEGACY_REPRODUCTION.md`.
+
+- `inference.py:HuggingfacePredictor` — **REFERENCE_ONLY** for checkpoint
+  loading, SSI+text tokenization, generation, and length metadata. The
+  hardcoded `.cuda()` call and monolithic evaluation loop were not migrated.
+- `RecordSchema`, `schema_to_ssi`, and `PrefixGenerator` —
+  **REIMPLEMENTED CLEAN-ROOM** as the baseline-specific `UIESchema` value
+  object, deterministic schema-order SSI, stable schema hash, and explicit
+  manifest metadata.
+- `SpotAsocPredictParser` — **REFERENCE_ONLY**. A conservative SEL parser was
+  independently implemented; upstream bracket completion, first-tree
+  truncation, malformed-to-empty fallback, unknown-label/span dropping, and
+  `<unk>` repair were not migrated.
+- `SEL2Record` and `proprocessing_graph_record` — **ADAPT_CONCEPT**. P0 retains
+  typed Spot-Association structures and only projects explicit binary
+  associations to canonical triples.
+- `EntityRecord`, `RelationRecord`, and `EventRecord` offset mapping —
+  **REFERENCE_ONLY / REIMPLEMENTED CLEAN-ROOM** as a separate exact alignment
+  stage with `exact`, `ambiguous`, and `not_found` statuses. Fuzzy/closest
+  repair and silent relation dropping were not migrated.
+- `MapConfig.de_duplicate` — **NOT MIGRATED**. Structure and projected triple
+  occurrences are retained; duplicate triples receive descriptive violations.
+- `DynamicSSIGenerator` sampling, rejection labels, target noise, and data
+  collators — **NOT MIGRATED** because they are training behavior, not the P0
+  inference contract.
+- `SpotAsocConstraintDecoder` and `prefix_allowed_tokens_fn` —
+  **REFERENCE_ONLY / FUTURE OPTIONAL PROFILE**. P0 records constraints as
+  disabled and does not migrate the state machine.
+- The legacy third `record.schema` line — **ADAPTED AS METADATA ONLY** because
+  the audited inference/parser/constraint paths load but do not enforce it.
+- No legacy source, parser, dataset example, Gold schema, prediction, or result
+  was copied verbatim into `re_te_system`.
+
+UIE is an external `UNIVERSAL_IE` baseline with structural-schema knowledge.
+It is not a controlled C0-C3 condition, and interface acceptance of custom
+labels is not evidence of reliable unseen-schema zero-shot extraction.

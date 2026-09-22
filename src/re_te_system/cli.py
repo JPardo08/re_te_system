@@ -7,16 +7,24 @@ from functools import partial
 import json
 from pathlib import Path
 
+from re_te_system.conditioning.uie_schema import UIESchema
 from re_te_system.extractors.mock import (
     MockExtractor,
     MockPythiaExtractor,
     MockRebelExtractor,
+    MockUIEExtractor,
 )
 from re_te_system.extractors.mrebel import MRebelConfig, MRebelExtractor
 from re_te_system.extractors.pythia import PythiaConfig, PythiaSpaceKBPExtractor
 from re_te_system.extractors.rebel import RebelConfig, RebelExtractor
+from re_te_system.extractors.uie import UIEConfig, UIEExtractor
 from re_te_system.parsing.mrebel import parse_mrebel
 from re_te_system.parsing.rebel import parse_rebel
+from re_te_system.parsing.sel import (
+    align_spot_structures,
+    parse_sel,
+    project_binary_relations,
+)
 from re_te_system.parsing.turtle import parse_turtle
 from re_te_system.runner.run import (
     WindowingConfig,
@@ -46,7 +54,16 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--output-root", required=True)
     run.add_argument(
         "--extractor",
-        choices=("mock", "rebel-mock", "pythia-mock", "mrebel", "rebel", "pythia"),
+        choices=(
+            "mock",
+            "rebel-mock",
+            "pythia-mock",
+            "uie-mock",
+            "mrebel",
+            "rebel",
+            "pythia",
+            "uie",
+        ),
         default="mock",
     )
     run.add_argument("--model-name")
@@ -58,6 +75,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--input-language", default="es")
     run.add_argument("--max-input-tokens", type=int, default=256)
     run.add_argument("--pythia-max-input-tokens", type=int)
+    run.add_argument("--uie-max-source-tokens", type=int, default=256)
+    run.add_argument("--uie-max-target-tokens", type=int, default=192)
+    run.add_argument("--uie-num-beams", type=int, default=1)
+    run.add_argument("--uie-schema-file")
     run.add_argument("--max-new-tokens", type=int, default=512)
     run.add_argument("--max-length", type=int, default=512)
     run.add_argument("--num-beams", type=int, default=3)
@@ -90,6 +111,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     task_class = None
     controlled_experiment_condition = None
+    structure_aligner = None
+    structure_projector = None
+    target_schema_knowledge = "none"
     native_schema = {"id": "wikidata_like", "inherited_from_model": True}
     if args.extractor == "mock":
         extractor = MockExtractor()
@@ -161,6 +185,43 @@ def main(argv: list[str] | None = None) -> int:
             "inherited_from_model": True,
             "scope": "fixed_domain_ontology",
         }
+    elif args.extractor == "uie-mock":
+        if not args.uie_schema_file:
+            raise SystemExit("--uie-schema-file is required for UIE extractors")
+        schema = UIESchema.read_json(args.uie_schema_file)
+        extractor = MockUIEExtractor()
+        parse_output = partial(
+            parse_sel,
+            spot_labels=schema.spot_labels,
+            association_labels=schema.association_labels,
+        )
+        structure_aligner = align_spot_structures
+        structure_projector = project_binary_relations
+        generation = UIEConfig().generation_config()
+        strategy = args.window_strategy or "NONE"
+        model_metadata = {
+            "base_model": "t5-v1_1-base",
+            "constraint_decoding": False,
+            "device": "none",
+            "dtype": "none",
+            "interface_accepts_custom_schema": True,
+            "parser_policy": "conservative_sel_v1",
+            "schema": schema.manifest_metadata(),
+            "tokenizer": "mock",
+            "zero_shot_unseen_schema_supported": "unknown",
+        }
+        model_family = "uie"
+        language_status = "out_of_documented_training_scope"
+        task_class = "UNIVERSAL_IE"
+        controlled_experiment_condition = "not_applicable"
+        target_schema_knowledge = "structural_schema"
+        native_schema = {
+            "id": schema.schema_id,
+            "inherited_from_model": False,
+            "scope": "dynamic_runtime_structural_schema",
+            "schema_hash": schema.stable_hash(),
+            "schema_version": schema.schema_version,
+        }
     elif args.extractor == "mrebel":
         config = MRebelConfig(
             model_name=args.model_name or "Babelscape/mrebel-large",
@@ -211,7 +272,7 @@ def main(argv: list[str] | None = None) -> int:
         }
         model_family = "rebel"
         language_status = "out_of_primary_model_scope"
-    else:
+    elif args.extractor == "pythia":
         prefixes = _prefixes(args.turtle_prefix)
         config = PythiaConfig(
             model_name=args.model_name or PythiaConfig().model_name,
@@ -252,6 +313,56 @@ def main(argv: list[str] | None = None) -> int:
             "inherited_from_model": True,
             "scope": "fixed_domain_ontology",
         }
+    else:
+        if not args.uie_schema_file:
+            raise SystemExit("--uie-schema-file is required for UIE extractors")
+        schema = UIESchema.read_json(args.uie_schema_file)
+        config = UIEConfig(
+            model_name=args.model_name or UIEConfig().model_name,
+            revision=args.model_revision or UIEConfig().revision,
+            device=args.device,
+            dtype=args.dtype,
+            max_source_tokens=args.uie_max_source_tokens,
+            max_target_tokens=args.uie_max_target_tokens,
+            num_beams=args.uie_num_beams,
+            seed=args.seed,
+            local_files_only=True,
+        )
+        extractor = UIEExtractor(schema=schema, config=config)
+        parse_output = partial(
+            parse_sel,
+            spot_labels=schema.spot_labels,
+            association_labels=schema.association_labels,
+        )
+        structure_aligner = align_spot_structures
+        structure_projector = project_binary_relations
+        generation = config.generation_config()
+        strategy = args.window_strategy or "TOKEN"
+        model_metadata = {
+            "base_model": "t5-v1_1-base",
+            "constraint_decoding": False,
+            "device": str(extractor.device),
+            "dtype": config.dtype,
+            "effective_input_limit": extractor.effective_input_limit,
+            "interface_accepts_custom_schema": True,
+            "model_max_length": extractor.model_max_length,
+            "parser_policy": "conservative_sel_v1",
+            "schema": schema.manifest_metadata(),
+            "tokenizer": extractor.tokenizer_name,
+            "zero_shot_unseen_schema_supported": "unknown",
+        }
+        model_family = "uie"
+        language_status = "out_of_documented_training_scope"
+        task_class = "UNIVERSAL_IE"
+        controlled_experiment_condition = "not_applicable"
+        target_schema_knowledge = "structural_schema"
+        native_schema = {
+            "id": schema.schema_id,
+            "inherited_from_model": False,
+            "scope": "dynamic_runtime_structural_schema",
+            "schema_hash": schema.stable_hash(),
+            "schema_version": schema.schema_version,
+        }
     maximum = args.window_max_units
     if strategy == "TOKEN" and maximum is None:
         maximum = getattr(extractor, "effective_input_limit", args.max_input_tokens)
@@ -274,9 +385,11 @@ def main(argv: list[str] | None = None) -> int:
         model_metadata=model_metadata,
         legacy_relation_filter=args.legacy_relation_filter,
         parse_output=parse_output,
+        structure_aligner=structure_aligner,
+        structure_projector=structure_projector,
         run_role="baseline",
         model_family=model_family,
-        target_schema_knowledge="none",
+        target_schema_knowledge=target_schema_knowledge,
         native_schema=native_schema,
         input_language=args.input_language,
         language_status=language_status,

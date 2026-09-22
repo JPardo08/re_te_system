@@ -5,6 +5,7 @@ from re_te_system.extractors.mock import (
     MockExtractor,
     MockPythiaExtractor,
     MockRebelExtractor,
+    MockUIEExtractor,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "MockExtractor",
     "MockPythiaExtractor",
     "MockRebelExtractor",
+    "MockUIEExtractor",
 ]

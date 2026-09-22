@@ -13,8 +13,11 @@ from re_te_system.contracts import (
     InputRecord,
     ParseIssue,
     ParseResult,
+    ParsedSpot,
+    ParsedTriple,
     PREDICTION_CONTRACT_VERSION,
     Segment,
+    spot_to_dict,
     triple_to_dict,
 )
 from re_te_system.extractors.base import Extractor
@@ -26,6 +29,11 @@ from re_te_system.validation.structural import validate_structural
 
 
 Parser = Callable[[str, str | None], ParseResult]
+StructureAligner = Callable[
+    [tuple[ParsedSpot, ...], str, int],
+    tuple[tuple[ParsedSpot, ...], tuple[ParseIssue, ...]],
+]
+StructureProjector = Callable[[tuple[ParsedSpot, ...]], tuple[ParsedTriple, ...]]
 
 
 @dataclass(frozen=True)
@@ -148,6 +156,8 @@ def run_pipeline(
     condition: str = "C0",
     legacy_relation_filter: bool = False,
     parse_output: Parser = parse_mrebel,
+    structure_aligner: StructureAligner | None = None,
+    structure_projector: StructureProjector | None = None,
     run_role: str = "baseline",
     model_family: str = "mrebel",
     target_schema_knowledge: str = "none",
@@ -197,14 +207,18 @@ def run_pipeline(
         "inputs_succeeded": 0,
         "inputs_total": len(inputs),
         "parse_failures": 0,
+        "parsed_structures": 0,
         "parsed_triples": 0,
         "raw_outputs": 0,
+        "structure_alignment_failures": 0,
         "valid_triples": 0,
     }
     count_tokens = getattr(extractor, "count_tokens", None)
     for item in sorted(inputs, key=lambda value: _natural_key(value.document_id)):
         raw_segments: list[dict[str, Any]] = []
         parsed_all = []
+        parsed_structures_all: list[ParsedSpot] = []
+        aligned_structures_all: list[ParsedSpot] = []
         parse_issues = []
         example_failed = False
         try:
@@ -244,9 +258,25 @@ def run_pipeline(
                     }
                 )
                 parsed = parse_output(raw.model_output, segment.segment_id)
-                aligned = align_triples(parsed.triples, segment.text, segment.start)
-                parsed_all.extend(aligned)
                 parse_issues.extend(parsed.issues)
+                parsed_structures_all.extend(parsed.structures)
+                aligned_structures = parsed.structures
+                if structure_aligner is not None:
+                    aligned_structures, alignment_issues = structure_aligner(
+                        parsed.structures,
+                        segment.text,
+                        segment.start,
+                    )
+                    parse_issues.extend(alignment_issues)
+                aligned_structures_all.extend(aligned_structures)
+                aligned_triples = align_triples(
+                    parsed.triples,
+                    segment.text,
+                    segment.start,
+                )
+                parsed_all.extend(aligned_triples)
+                if structure_projector is not None:
+                    parsed_all.extend(structure_projector(aligned_structures))
                 if raw.generation_metadata.get("output_reached_limit") is True:
                     parse_issues.append(
                         ParseIssue(
@@ -277,6 +307,7 @@ def run_pipeline(
         parsed_tuple = tuple(parsed_all)
         normalized = normalize_triples(parsed_tuple)
         validated = validate_structural(normalized, tuple(parse_issues))
+        stats["parsed_structures"] += len(parsed_structures_all)
         stats["parsed_triples"] += len(parsed_tuple)
         stats["parse_failures"] += sum(
             issue.code
@@ -285,6 +316,8 @@ def run_pipeline(
                 "EMPTY_MODEL_OUTPUT",
                 "INVALID_TURTLE",
                 "PREFIX_RESOLUTION_FAILURE",
+                "MALFORMED_SEL",
+                "TRUNCATED_SEL",
                 "UNPARSEABLE_CHUNK",
             }
             for issue in parse_issues
@@ -294,6 +327,14 @@ def run_pipeline(
         )
         stats["alignment_failures"] += sum(
             triple.subject_span is None or triple.object_span is None for triple in normalized
+        )
+        stats["structure_alignment_failures"] += sum(
+            spot.alignment_status in {"ambiguous", "not_found"}
+            or any(
+                association.alignment_status in {"ambiguous", "not_found"}
+                for association in spot.associations
+            )
+            for spot in aligned_structures_all
         )
         stats["valid_triples"] += sum(
             bool(triple.subject and triple.relation and triple.object) for triple in normalized
@@ -318,6 +359,13 @@ def run_pipeline(
                 "violations": [asdict(value) for value in validated.violations],
             },
         }
+        if structure_aligner is not None or structure_projector is not None:
+            prediction["parsed_structures"] = [
+                spot_to_dict(spot) for spot in parsed_structures_all
+            ]
+            prediction["aligned_structures"] = [
+                spot_to_dict(spot) for spot in aligned_structures_all
+            ]
         if legacy_relation_filter:
             prediction["derived"] = {
                 "legacy_filtered": [
