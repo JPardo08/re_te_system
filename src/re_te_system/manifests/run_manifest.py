@@ -68,6 +68,8 @@ def build_manifest(
     native_schema: Mapping[str, Any] | None = None,
     input_language: str = "es",
     language_status: str = "UNKNOWN",
+    task_class: str | None = None,
+    controlled_experiment_condition: str | None = None,
     code_commit: str | None = None,
 ) -> dict[str, Any]:
     software = {
@@ -102,6 +104,10 @@ def build_manifest(
         "target_schema_knowledge": target_schema_knowledge,
         "windowing": dict(windowing),
     }
+    if task_class is not None:
+        identity["task_class"] = task_class
+    if controlled_experiment_condition is not None:
+        identity["controlled_experiment_condition"] = controlled_experiment_condition
     return {
         "run_id": scientific_identity(identity),
         **identity,

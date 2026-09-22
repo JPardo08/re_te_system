@@ -67,3 +67,42 @@ class MockRebelExtractor:
                 "truncated": False,
             },
         )
+
+
+@dataclass
+class MockPythiaExtractor:
+    """Pythia-shaped fixture with exact Turtle output and no ML dependencies."""
+
+    model_name: str = "mock/pythia-spacekbp-contract"
+    model_revision: str = "mock-pythia-v1"
+    outputs: dict[str, str] = field(default_factory=dict)
+    fail_on: set[str] = field(default_factory=set)
+
+    def extract(self, text: str, context: ExtractionContext) -> RawExtractionResult:
+        if context.input_id in self.fail_on:
+            raise RuntimeError("configured mock Pythia failure")
+        output = self.outputs.get(
+            context.input_id,
+            (
+                "<https://example.org/mission> "
+                "<https://example.org/hasDescription> "
+                f'"{text}" .'
+            ),
+        )
+        return RawExtractionResult(
+            model_output=output,
+            generation_metadata={
+                "deterministic": True,
+                "effective_input_limit": 1536,
+                "input_token_count": len(text.split()),
+                "max_new_tokens": 512,
+                "model_max_length": 2048,
+                "number_of_sequences": 1,
+                "output_reached_limit": False,
+                "output_token_count": len(output.split()),
+                "prompt_profile": "basic",
+                "prompt_profile_version": "basic-v1",
+                "quantization": "none",
+                "truncated_input": False,
+            },
+        )

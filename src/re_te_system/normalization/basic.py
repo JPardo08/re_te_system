@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import re
 import unicodedata
 
@@ -15,16 +16,19 @@ def normalize_text(value: str) -> str:
 def normalize_triples(triples: tuple[ParsedTriple, ...]) -> tuple[ParsedTriple, ...]:
     """Normalize serialization representation; retain order and duplicates."""
     return tuple(
-        ParsedTriple(
+        replace(
+            triple,
             subject=normalize_text(triple.subject),
             relation=normalize_text(triple.relation),
-            object=normalize_text(triple.object),
+            object=(
+                triple.object
+                if triple.object_is_literal
+                else normalize_text(triple.object)
+            ),
             subject_type=normalize_text(triple.subject_type) if triple.subject_type else None,
             object_type=normalize_text(triple.object_type) if triple.object_type else None,
-            subject_span=triple.subject_span,
-            object_span=triple.object_span,
-            span_source=triple.span_source,
-            segment_id=triple.segment_id,
+            datatype=normalize_text(triple.datatype) if triple.datatype else None,
+            language=normalize_text(triple.language) if triple.language else None,
         )
         for triple in triples
     )
@@ -48,16 +52,11 @@ def align_triples(
         return segment_start + match.start(), segment_start + match.end()
 
     return tuple(
-        ParsedTriple(
-            subject=triple.subject,
-            relation=triple.relation,
-            object=triple.object,
-            subject_type=triple.subject_type,
-            object_type=triple.object_type,
+        replace(
+            triple,
             subject_span=locate(triple.subject),
             object_span=locate(triple.object),
             span_source="posthoc_string_alignment",
-            segment_id=triple.segment_id,
         )
         for triple in triples
     )

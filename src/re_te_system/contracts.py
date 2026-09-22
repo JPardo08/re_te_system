@@ -42,6 +42,12 @@ class ParsedTriple:
     object_span: tuple[int, int] | None = None
     span_source: str | None = None
     segment_id: str | None = None
+    subject_is_uri: bool | None = None
+    predicate_is_uri: bool | None = None
+    object_is_uri: bool | None = None
+    object_is_literal: bool | None = None
+    datatype: str | None = None
+    language: str | None = None
 
 
 @dataclass(frozen=True)
@@ -102,4 +108,14 @@ def triple_to_dict(triple: ParsedTriple) -> dict[str, Any]:
         value["subject_span"] = list(value["subject_span"])
     if value["object_span"] is not None:
         value["object_span"] = list(value["object_span"])
+    for field_name in (
+        "subject_is_uri",
+        "predicate_is_uri",
+        "object_is_uri",
+        "object_is_literal",
+        "datatype",
+        "language",
+    ):
+        if value[field_name] is None:
+            del value[field_name]
     return value

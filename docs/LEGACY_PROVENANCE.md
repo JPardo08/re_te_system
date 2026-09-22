@@ -81,6 +81,43 @@ Audited at the same repository revision
   manifest configuration.
 - Legacy duplicate removal — **NOT MIGRATED**.
 
-REBEL and mREBEL are documented only as external baselines. Neither supplies
-the controlled model needed for the future C0–C3 target-schema-conditioning
-experiment.
+## TFG Hugo Pythia / SPACE-KBP
+
+Audited at source repository revision
+`05a563234b283d48a1b19740d45261d7541d93f0`.
+
+- `scripts/pythia_extractor.py` — **REFERENCE_ONLY / CLEAN-ROOM SOURCE**. It
+  established historical input/output expectations and anti-patterns; no code,
+  prompt, or result was copied verbatim.
+- The CausalLM `Extractor` shape — **REIMPLEMENTED CLEAN-ROOM** using the
+  shared protocol, a canonical pinned checkpoint identity, local-only loading
+  by default, explicit dtype/device, and exact decoded RAW preservation.
+- Prompt selection — **REIMPLEMENTED CLEAN-ROOM** as the versioned neutral
+  `basic-v1` profile. The hardcoded Aqua example and legacy few-shot prompt
+  were not copied or migrated.
+- Model length handling — **REIMPLEMENTED CLEAN-ROOM** from
+  `max_position_embeddings`, generation budget, and prompt-aware tokenizer
+  counts. The fixed 1,024-token cutoff and silent truncation were not migrated.
+- Turtle parsing with RDFLib — **REIMPLEMENTED CLEAN-ROOM** as a generic,
+  conservative parser with optional external prefix context. Parsed RDF term
+  metadata and duplicate occurrences are preserved; RAW is never rewritten.
+- Prefix injection into model output, prefix stripping, bare-subject repair,
+  invented closing syntax, truncation-to-valid-RDF, and the SpaceKBP-specific
+  regex fallback — **NOT MIGRATED**.
+- Prediction-derived relation aliases and the model-assisted/manual alias
+  workflow — **NOT MIGRATED**.
+- Default duplicate removal — **NOT MIGRATED**. Duplicates remain predictions
+  and receive descriptive `DUPLICATE_TRIPLE` violations.
+- Mutable `anonkbp` model default — **NOT MIGRATED**. P0 pins the canonical
+  `expertailab` checkpoint and immutable revision; remote download remains
+  unauthorized while the fine-tuned-weight license is undeclared.
+- CSV-only flattened output and missing RAW Turtle — **NOT MIGRATED**. Pythia
+  uses the versioned PredictionRecord stages, failures artifact, manifest, and
+  the existing non-destructive evaluation export.
+- Legacy result CSVs, aliases, prompts, and test scores — **REFERENCE_ONLY**;
+  none were copied into runtime fixtures or outputs.
+
+REBEL, mREBEL, and Pythia/SPACE-KBP are documented only as external baselines.
+REBEL/mREBEL are `END_TO_END_TE`; Pythia is a `KBP_DOMAIN_BASELINE`. None
+supplies the controlled model needed for the future C0–C3
+target-schema-conditioning experiment.

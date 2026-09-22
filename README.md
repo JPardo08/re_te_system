@@ -4,13 +4,12 @@ Reproducible Paper 3 extraction system. P0 implements the file-based pipeline
 `TEXT → RAW → PARSED → NORMALIZED → VALIDATED → prediction artifact → run
 manifest` without importing benchmark or evaluator Python packages.
 
-## External baselines and scientific C0
+## External baselines and controlled C0 separation
 
-mREBEL and REBEL are external historical baselines with pretrained,
-Wikidata-style native relation schemas. Both run with target condition `C0`:
-the model receives document text but no Gold labels, Hohfeld types, signatures,
-definitions, examples, ontology, or relation aliases. Neither baseline maps
-native relations to Hohfeld.
+mREBEL and REBEL are external historical TE baselines with pretrained,
+Wikidata-style native relation schemas. Pythia/SPACE-KBP is a separate
+`KBP_DOMAIN_BASELINE` tied to its fixed space-mission ontology. None is a
+controlled C0/C1/C2/C3 condition, and none maps native output to Hohfeld.
 
 mREBEL is multilingual and receives the required `es_XX`/`tp_XX` runtime
 formatting. REBEL is English-centric/monolingual; Spanish text is passed
@@ -20,7 +19,9 @@ The historical mREBEL `REL_ALLOWED` list remains disabled by default.
 
 Future C0–C3 comparisons will use one controlled model to study target-schema
 conditioning. Differences between these external baselines are not evidence of
-a C0→C3 conditioning effect.
+a C0→C3 conditioning effect. Pythia manifests add
+`controlled_experiment_condition: not_applicable`; the legacy-compatible
+`condition: C0` field must not be interpreted causally.
 
 ## Development environment
 
@@ -43,19 +44,27 @@ cache:
 export HF_HOME="$PWD/.cache/huggingface"
 ```
 
-Core and mock execution have no runtime dependencies. For development without
+Core and REBEL/mREBEL mock execution have no runtime dependencies. Pythia
+Turtle parsing requires its optional RDFLib dependency. For development without
 ML dependencies, use `python -m pip install -e ".[dev]"`. The semantically
-distinct `mrebel` and `rebel` extras currently declare the same ML dependency
-set and can be combined with `dev` independently:
+distinct `mrebel`, `rebel`, and `pythia` extras can be combined with `dev`
+independently:
 
 ```bash
 python -m pip install -e ".[dev,mrebel]"
 python -m pip install -e ".[dev,rebel]"
+python -m pip install -e ".[dev,pythia]"
 ```
 
 Use `--extractor rebel-mock` for the dependency-free REBEL contract fixture, or
 `--extractor rebel --local-files-only` for a cached real checkpoint. The latter
 defaults to `Babelscape/rebel-large` and never adds mREBEL language tokens.
+
+Use `--extractor pythia-mock` for the weight-free Pythia/Turtle contract
+fixture after installing the `pythia` extra. The real adapter is pinned to the
+canonical immutable checkpoint and uses local files only. Its fine-tuned weight
+license is unresolved, so real model download and smoke are not authorized.
+See `docs/PYTHIA_BASELINE.md`.
 
 ## Mock document run
 

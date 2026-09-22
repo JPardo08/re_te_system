@@ -11,6 +11,7 @@ from typing import Any, Callable, Iterable, Mapping
 from re_te_system.contracts import (
     ExtractionContext,
     InputRecord,
+    ParseIssue,
     ParseResult,
     PREDICTION_CONTRACT_VERSION,
     Segment,
@@ -153,6 +154,8 @@ def run_pipeline(
     native_schema: Mapping[str, Any] | None = None,
     input_language: str = "es",
     language_status: str = "supported",
+    task_class: str | None = None,
+    controlled_experiment_condition: str | None = None,
     code_commit: str | None = None,
 ) -> Path:
     model = {
@@ -179,6 +182,8 @@ def run_pipeline(
         or {"id": "wikidata_like", "inherited_from_model": True},
         input_language=input_language,
         language_status=language_status,
+        task_class=task_class,
+        controlled_experiment_condition=controlled_experiment_condition,
         code_commit=code_commit,
     )
     run_dir = Path(output_root) / manifest["run_id"]
@@ -242,8 +247,23 @@ def run_pipeline(
                 aligned = align_triples(parsed.triples, segment.text, segment.start)
                 parsed_all.extend(aligned)
                 parse_issues.extend(parsed.issues)
+                if raw.generation_metadata.get("output_reached_limit") is True:
+                    parse_issues.append(
+                        ParseIssue(
+                            "TRUNCATED_GENERATION",
+                            "Generation reached the configured output token limit",
+                            "soft",
+                        )
+                    )
             except Exception as exc:
                 example_failed = True
+                parse_issues.append(
+                    ParseIssue(
+                        "MODEL_FAILURE",
+                        f"{type(exc).__name__}: {exc}",
+                        "hard",
+                    )
+                )
                 failures.append(
                     {
                         "error_message": str(exc),
@@ -259,7 +279,15 @@ def run_pipeline(
         validated = validate_structural(normalized, tuple(parse_issues))
         stats["parsed_triples"] += len(parsed_tuple)
         stats["parse_failures"] += sum(
-            issue.code in {"UNPARSEABLE_CHUNK", "EMPTY_MODEL_OUTPUT"} for issue in parse_issues
+            issue.code
+            in {
+                "EMPTY_GRAPH",
+                "EMPTY_MODEL_OUTPUT",
+                "INVALID_TURTLE",
+                "PREFIX_RESOLUTION_FAILURE",
+                "UNPARSEABLE_CHUNK",
+            }
+            for issue in parse_issues
         )
         stats["duplicates"] += sum(
             item.code == "DUPLICATE_TRIPLE" for item in validated.violations

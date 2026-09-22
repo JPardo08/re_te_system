@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 import argparse
+from functools import partial
 import json
 from pathlib import Path
 
-from re_te_system.extractors.mock import MockExtractor, MockRebelExtractor
+from re_te_system.extractors.mock import (
+    MockExtractor,
+    MockPythiaExtractor,
+    MockRebelExtractor,
+)
 from re_te_system.extractors.mrebel import MRebelConfig, MRebelExtractor
+from re_te_system.extractors.pythia import PythiaConfig, PythiaSpaceKBPExtractor
 from re_te_system.extractors.rebel import RebelConfig, RebelExtractor
 from re_te_system.parsing.mrebel import parse_mrebel
 from re_te_system.parsing.rebel import parse_rebel
+from re_te_system.parsing.turtle import parse_turtle
 from re_te_system.runner.run import (
     WindowingConfig,
     benchmark_identity,
@@ -18,6 +25,16 @@ from re_te_system.runner.run import (
     load_hohfeld_documents,
     run_pipeline,
 )
+
+
+def _prefixes(values: list[str]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for value in values:
+        prefix, separator, namespace = value.partition("=")
+        if not separator or not prefix or not namespace:
+            raise SystemExit("--turtle-prefix requires PREFIX=URI")
+        result[prefix] = namespace
+    return result
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -29,7 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--output-root", required=True)
     run.add_argument(
         "--extractor",
-        choices=("mock", "rebel-mock", "mrebel", "rebel"),
+        choices=("mock", "rebel-mock", "pythia-mock", "mrebel", "rebel", "pythia"),
         default="mock",
     )
     run.add_argument("--model-name")
@@ -38,7 +55,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--target-token", default="tp_XX")
     run.add_argument("--device", default="auto")
     run.add_argument("--dtype", default="float32")
+    run.add_argument("--input-language", default="es")
     run.add_argument("--max-input-tokens", type=int, default=256)
+    run.add_argument("--pythia-max-input-tokens", type=int)
     run.add_argument("--max-new-tokens", type=int, default=512)
     run.add_argument("--max-length", type=int, default=512)
     run.add_argument("--num-beams", type=int, default=3)
@@ -47,6 +66,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--window-strategy", choices=("NONE", "CHARACTER", "TOKEN"))
     run.add_argument("--window-max-units", type=int)
     run.add_argument("--window-overlap", type=int, default=0)
+    run.add_argument("--prompt-profile", choices=("basic",), default="basic")
+    run.add_argument("--turtle-prefix", action="append", default=[])
     run.add_argument("--legacy-relation-filter", action="store_true")
     export = commands.add_parser("export-evaluation")
     export.add_argument("--predictions", required=True)
@@ -67,6 +88,9 @@ def main(argv: list[str] | None = None) -> int:
     dataset, benchmark_source = benchmark_identity(
         args.documents, args.benchmark_manifest
     )
+    task_class = None
+    controlled_experiment_condition = None
+    native_schema = {"id": "wikidata_like", "inherited_from_model": True}
     if args.extractor == "mock":
         extractor = MockExtractor()
         parse_output = parse_mrebel
@@ -108,6 +132,35 @@ def main(argv: list[str] | None = None) -> int:
         }
         model_family = "rebel"
         language_status = "out_of_primary_model_scope"
+    elif args.extractor == "pythia-mock":
+        prefixes = _prefixes(args.turtle_prefix)
+        extractor = MockPythiaExtractor()
+        parse_output = partial(parse_turtle, prefixes=prefixes)
+        generation = PythiaConfig().generation_config()
+        strategy = args.window_strategy or "NONE"
+        model_metadata = {
+            "base_model": "EleutherAI/pythia-1b-deduped",
+            "device": "none",
+            "dtype": "none",
+            "effective_input_limit": 1536,
+            "model_max_length": 2048,
+            "prompt_profile": args.prompt_profile,
+            "quantization": "none",
+            "remote_download_authorized": False,
+            "tokenizer": "mock",
+            "turtle_prefix_context": prefixes,
+        }
+        model_family = "pythia_spacekbp"
+        language_status = (
+            "native_domain" if args.input_language == "en" else "out_of_native_domain"
+        )
+        task_class = "KBP_DOMAIN_BASELINE"
+        controlled_experiment_condition = "not_applicable"
+        native_schema = {
+            "id": "space_kbp_space_ontology",
+            "inherited_from_model": True,
+            "scope": "fixed_domain_ontology",
+        }
     elif args.extractor == "mrebel":
         config = MRebelConfig(
             model_name=args.model_name or "Babelscape/mrebel-large",
@@ -134,7 +187,7 @@ def main(argv: list[str] | None = None) -> int:
         }
         model_family = "mrebel"
         language_status = "supported"
-    else:
+    elif args.extractor == "rebel":
         config = RebelConfig(
             model_name=args.model_name or "Babelscape/rebel-large",
             revision=args.model_revision,
@@ -158,9 +211,50 @@ def main(argv: list[str] | None = None) -> int:
         }
         model_family = "rebel"
         language_status = "out_of_primary_model_scope"
+    else:
+        prefixes = _prefixes(args.turtle_prefix)
+        config = PythiaConfig(
+            model_name=args.model_name or PythiaConfig().model_name,
+            revision=args.model_revision or PythiaConfig().revision,
+            prompt_profile=args.prompt_profile,
+            device=args.device,
+            dtype=args.dtype,
+            max_input_tokens=args.pythia_max_input_tokens,
+            max_new_tokens=args.max_new_tokens,
+            seed=args.seed,
+            local_files_only=True,
+        )
+        extractor = PythiaSpaceKBPExtractor(config)
+        parse_output = partial(parse_turtle, prefixes=prefixes)
+        generation = config.generation_config()
+        strategy = args.window_strategy or "TOKEN"
+        model_metadata = {
+            "base_model": "EleutherAI/pythia-1b-deduped",
+            "device": str(extractor.device),
+            "dtype": config.dtype,
+            "effective_input_limit": extractor.effective_input_limit,
+            "model_max_length": extractor.model_max_length,
+            "prompt_profile": config.prompt_profile,
+            "prompt_profile_version": "basic-v1",
+            "quantization": config.quantization,
+            "remote_download_authorized": False,
+            "tokenizer": config.tokenizer_name or config.model_name,
+            "turtle_prefix_context": prefixes,
+        }
+        model_family = "pythia_spacekbp"
+        language_status = (
+            "native_domain" if args.input_language == "en" else "out_of_native_domain"
+        )
+        task_class = "KBP_DOMAIN_BASELINE"
+        controlled_experiment_condition = "not_applicable"
+        native_schema = {
+            "id": "space_kbp_space_ontology",
+            "inherited_from_model": True,
+            "scope": "fixed_domain_ontology",
+        }
     maximum = args.window_max_units
     if strategy == "TOKEN" and maximum is None:
-        maximum = args.max_input_tokens
+        maximum = getattr(extractor, "effective_input_limit", args.max_input_tokens)
     windowing = WindowingConfig(
         strategy=strategy,
         max_units=maximum,
@@ -183,9 +277,11 @@ def main(argv: list[str] | None = None) -> int:
         run_role="baseline",
         model_family=model_family,
         target_schema_knowledge="none",
-        native_schema={"id": "wikidata_like", "inherited_from_model": True},
-        input_language="es",
+        native_schema=native_schema,
+        input_language=args.input_language,
         language_status=language_status,
+        task_class=task_class,
+        controlled_experiment_condition=controlled_experiment_condition,
     )
     print(json.dumps({"run_dir": str(run_dir), "run_id": run_dir.name}, sort_keys=True))
     return 0

@@ -50,6 +50,8 @@ def validate_structural(
             ("OBJECT_TYPE", triple.object_type),
             ("SPAN_SOURCE", triple.span_source),
             ("SEGMENT_ID", triple.segment_id),
+            ("DATATYPE", triple.datatype),
+            ("LANGUAGE", triple.language),
         ):
             if value is not None and not isinstance(value, str):
                 violations.append(
@@ -57,6 +59,21 @@ def validate_structural(
                         f"INVALID_{field_name}_TYPE",
                         "hard",
                         f"{field_name.lower()} must be a string or null",
+                        index,
+                    )
+                )
+        for field_name, value in (
+            ("SUBJECT_IS_URI", triple.subject_is_uri),
+            ("PREDICATE_IS_URI", triple.predicate_is_uri),
+            ("OBJECT_IS_URI", triple.object_is_uri),
+            ("OBJECT_IS_LITERAL", triple.object_is_literal),
+        ):
+            if value is not None and not isinstance(value, bool):
+                violations.append(
+                    Violation(
+                        f"INVALID_{field_name}_TYPE",
+                        "hard",
+                        f"{field_name.lower()} must be a boolean or null",
                         index,
                     )
                 )

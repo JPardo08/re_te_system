@@ -25,6 +25,9 @@ outputs; it is never reconstructed from triples.
 
 Each triple contains `subject`, `relation`, `object`, optional pretrained entity
 types, optional spans, `span_source`, and optional internal `segment_id`.
+RDF-producing adapters may additionally preserve `subject_is_uri`,
+`predicate_is_uri`, `object_is_uri`, `object_is_literal`, `datatype`, and
+`language`; absent RDF metadata fields are omitted.
 Parsed, normalized, and validated arrays are separate and duplicates retain
 their occurrence order.
 

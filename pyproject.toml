@@ -21,6 +21,11 @@ rebel = [
   "torch>=2.2",
   "transformers>=4.40,<5",
 ]
+pythia = [
+  "rdflib>=7,<8",
+  "torch>=2.2",
+  "transformers>=4.40,<5",
+]
 dev = ["pytest>=8,<9"]
 
 [project.scripts]
