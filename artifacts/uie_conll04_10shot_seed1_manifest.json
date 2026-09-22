@@ -1,0 +1,205 @@
+{
+  "artifact_id": "uie-base-en-conll04-10shot-seed1",
+  "cesvima_status": "NOT_PREFLIGHTED",
+  "determinism": {
+    "first_inventory_file_sha256": "e7e9b56b16e95afacf2686fdc4c132320355cf1798013a380de19be2fc0a845b",
+    "first_validation_file_sha256": "efc6a7c106c8660177c16c4c61aec20a4dc678f0f2d61b89753074b54e8f21f8",
+    "generated_tree_combined_sha256": "5bc9929f808ac9acee82a3e71acf21302d3e55e43f774680d2ed5c232a88df75",
+    "python_hash_seed": 0,
+    "python_hash_seed_policy": "reproducibility_hardening",
+    "repeatability_status": "PASS",
+    "second_inventory_file_sha256": "e7e9b56b16e95afacf2686fdc4c132320355cf1798013a380de19be2fc0a845b",
+    "second_validation_file_sha256": "efc6a7c106c8660177c16c4c61aec20a4dc678f0f2d61b89753074b54e8f21f8",
+    "upstream_hash_seed_controlled": false
+  },
+  "checkpoint": {
+    "best_eval_metric": null,
+    "config_sha256": null,
+    "directory": null,
+    "selected_epoch": null,
+    "selected_step": null,
+    "status": "NOT_STARTED",
+    "tokenizer_sha256": null,
+    "weight_files": []
+  },
+  "dataset": {
+    "converted_full": {
+      "test_sha256": "91d6b666268bacf73ea9352f7111c2ef84a212374148bb357933555707811feb",
+      "train_sha256": "d59e10133d2272e6daf4837ffe7236aa1f4f708af44142f4c48536e211ffdcc6",
+      "validation_sha256": "a9be8c5c3716456fb3caffa13f069feea6272a07a4fadce47265db07b30debb8"
+    },
+    "converter_files": {
+      "conll04.yaml": "14c9a45958c58d7b904747da58c178abdfa080bdd8b951ce8d7927306c963057",
+      "sample_data_shot.py": "4559990f27202d344235ec598a8b4eaca14528466ec6924ea73904ddea56c473",
+      "sincere_processing.py": "f1f6166e402b2dc3b738b1d8972b13f484a90a7f024887537feb83eec28c49a2",
+      "uie_convert.py": "767a016942abe47c7ec6bb5fc669d869d9496ebdf4f512fea66cb15da36ea151"
+    },
+    "generated_workspace_paths": {
+      "full_converted": "_legacy/UIE/dataset_processing/converted_data/text2spotasoc/relation/conll04",
+      "intermediate": "_legacy/UIE/dataset_processing/data/relation/conll04",
+      "shot_10_seed1": "_legacy/UIE/dataset_processing/converted_data/text2spotasoc/relation/conll04_shot/seed1/10shot"
+    },
+    "intermediate": {
+      "dev_sha256": "74b016b284df794bddb8b5fc43ffcbc3abd8a9a8f24d4dd7fea8a3f64ac3aa95",
+      "test_sha256": "d208a4c770f6c4c4bcdcbc778e8edd0b642649ed66ff7ab72410ae8cb77899bc",
+      "train_sha256": "e4ee4a3e67a54795f8d64ce247ad8f0c9553ade088239a3b6c2e75aff2be28e5"
+    },
+    "license_note": "Sincere code is Apache-2.0; CoNLL04 dataset terms require independent confirmation before redistribution.",
+    "public_redistribution": "UNRESOLVED",
+    "source": {
+      "canonical_workspace_path": "_legacy/sincere/data/conll04.json",
+      "file": "btaille/sincere:data/conll04.json",
+      "file_git_blob": "87918d38a5ac704de9a6df2b4cce9f4a4f3bc495",
+      "file_sha256": "3abe11eb5750e2c37e99a428f5e6c7e3b15f77d66053bca85e21e0772d601119",
+      "file_size_bytes": 750139,
+      "introduced_revision": "c8a5972845ca3ae969934a245a3c4f737b8e2cb6",
+      "original_lineage": "Eberts and Ulges preprocessing; Gupta 2016 split; original CoNLL04 resource",
+      "original_resource": {
+        "current_corpus_sha256": "93e6c327f8d66bdd530352ef4c1ca78baf5fede904b546dd4987f83a1183ee98",
+        "paper": "https://aclanthology.org/W04-2401/",
+        "url": "https://cogcomp.seas.upenn.edu/page/resource_view/43"
+      },
+      "repository": "https://github.com/btaille/sincere",
+      "revision": "dd1c34916ddcdc5ceb2799d64b17e80cdf1a5b31",
+      "uie_staged_link": "_legacy/UIE/dataset_processing/data/sincere/conll04.json",
+      "spert_split_sha256": {
+        "dev": "3965a5110a79671fb74a78c0fd0113c4da6583c3833bd418c1ca414bb491e010",
+        "test": "347f45cf181b5641d2373248a1af0592954415234f72536835dde1df1b504556",
+        "train": "65c52d5b6134c72c44277c74c5ecb354bf33aa352fc7b856edf6bda0bb436eea"
+      }
+    },
+    "validation_report": {
+      "path": "artifacts/uie_conll04_10shot_seed1_validation.json",
+      "report_combined_hash": "8e813869fc6c0546b321e1dc8625f19ac17bced8e644b36ea117389f22542c91",
+      "sha256": "efc6a7c106c8660177c16c4c61aec20a4dc678f0f2d61b89753074b54e8f21f8",
+      "status": "validated_with_warnings"
+    }
+  },
+  "environment": {
+    "gpu_preflight": {
+      "cuda_visible": null,
+      "forward_backward_batch": null,
+      "imports": null,
+      "model_load": null,
+      "tokenizer_load": null
+    },
+    "original": {
+      "cuda": "10.2 or 11.1",
+      "python": "3.8",
+      "pytorch": "1.8.0",
+      "transformers": "4.6.1"
+    },
+    "planned": {
+      "deviations": [],
+      "status": "pending_gpu_node_preflight"
+    }
+  },
+  "job": {
+    "hostname": null,
+    "slurm_job_id": null,
+    "status": "NOT_PREFLIGHTED",
+    "submission_script": null,
+    "submitted_at": null
+  },
+  "result_metrics": null,
+  "split": {
+    "definition": "For each relation label independently, random.sample up to 10 training sentence indices after random.shuffle; append selected examples without cross-label deduplication.",
+    "entity_labels": [
+      "other",
+      "organization",
+      "location",
+      "people"
+    ],
+    "entity_schema_sha256": "3aca8841a0525d36de14b9884753a76259d3adad5cf0c84e72988ce83ccff967",
+    "event_schema_sha256": "3470a9d51834a60a8b709b30d2e205a879d9d28d1a0515068eafe838ffcaeda8",
+    "leakage_warning": {
+      "full_train_test_text_overlap": 18,
+      "full_train_validation_text_overlap": 12,
+      "full_validation_test_text_overlap": 3,
+      "policy": "record_without_manual_correction",
+      "shot_train_test_text_overlap": 1,
+      "shot_train_validation_text_overlap": 0
+    },
+    "record_schema_sha256": "efcac0112405e307aec133d4a289651ed48f93477b004b3fb2e29d1b34913e3d",
+    "relation_labels": [
+      "organization in",
+      "work for",
+      "located in",
+      "live in",
+      "kill"
+    ],
+    "relation_schema_sha256": "64eb41cc308717e5851984ad2ee124b4c68085bb9dfc3b72b9348958b1b34d62",
+    "seed_argument": "1",
+    "seed_type": "string_as_parsed_by_upstream_argparse",
+    "shot": 10,
+    "split_hash": "5fecc7091bf7152d04a4eb43641933600f24f3af11995bc3e8f8d268fd43da7b",
+    "test_sha256": "91d6b666268bacf73ea9352f7111c2ef84a212374148bb357933555707811feb",
+    "spot_to_association": {
+      "location": [
+        "located in"
+      ],
+      "organization": [
+        "organization in"
+      ],
+      "other": [],
+      "people": [
+        "work for",
+        "kill",
+        "live in"
+      ]
+    },
+    "test_examples": 288,
+    "train_duplicate_text_occurrences": 2,
+    "train_examples": 50,
+    "validation_examples": 231,
+    "validation_sha256": "a9be8c5c3716456fb3caffa13f069feea6272a07a4fadce47265db07b30debb8"
+  },
+  "status": "DETERMINISTIC_DATA_FROZEN",
+  "training_status": "NOT_STARTED",
+  "training_config": {
+    "association_noise": 0.1,
+    "base_checkpoint": {
+      "id": "luyaojie/uie-base-en",
+      "revision": "966f8b1fc4c74e94ab552081605913ad5133cc41"
+    },
+    "batch_size": 16,
+    "best_model_metric": "eval_overall-F1",
+    "constraint_decoding": false,
+    "decoding_format": "spotasoc",
+    "epochs": 200,
+    "evaluation_schema": "full_ordered",
+    "label_smoothing": 0,
+    "learning_rate": 0.0001,
+    "max_prefix_length": -1,
+    "max_source_length": 256,
+    "max_target_length": 192,
+    "meta_negative": -1,
+    "meta_positive_rate": 1,
+    "random_prompt_training": true,
+    "scheduler": "constant",
+    "spot_noise": 0.1,
+    "split_seed_argument": "1",
+    "training_seed": 42,
+    "training_seed_status": "strict_upstream_fidelity",
+    "warmup_ratio": 0.06
+  },
+  "upstream": {
+    "repository": "https://github.com/universal-ie/UIE",
+    "revision": "c88dd08b8ad0016ec597ebc6f8fff49480367bb2",
+    "training_source_hashes": {
+      "base_model_conf_sa_shot.ini": "ac66eeb4593456344faf1504146e3a08a7d147c8338a556e9311223b21502cc2",
+      "function_code.bash": "d17c2bea3ba2b6fd85ae1bf86cdf7e634d85dec44985cfd84426c0dce6325def",
+      "run_exp_shot.bash": "4a40ba035b6ea7236f56767ad69805a6086ed2bcf55c3a58c5205cd88ed63729",
+      "run_uie_finetune_shot.bash": "c255931d48d75578b28c7314bc99fc06d4149197b7a86346662ef74e76a53657"
+    }
+  },
+  "workspace": {
+    "implementation": "re_te_system",
+    "sincere_source": "_legacy/sincere",
+    "sincere_source_class": "UPSTREAM_DATA_SOURCE_READ_ONLY",
+    "uie_source": "_legacy/UIE",
+    "uie_source_class": "UPSTREAM_READ_ONLY",
+    "implementation_class": "PAPER3_IMPLEMENTATION"
+  },
+  "weights_committed": false
+}

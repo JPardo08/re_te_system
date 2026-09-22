@@ -1,0 +1,184 @@
+{
+  "combined_hash": "8e813869fc6c0546b321e1dc8625f19ac17bced8e644b36ea117389f22542c91",
+  "full": {
+    "test": {
+      "duplicate_ids": 0,
+      "duplicate_text_occurrences": 1,
+      "ids_present": 0,
+      "parser_counter": {
+        "pred_tree": 1079,
+        "well-formed": 288
+      },
+      "rows": 288,
+      "sha256": "91d6b666268bacf73ea9352f7111c2ef84a212374148bb357933555707811feb",
+      "text_sha256": "33a0f9f0422fb82e7554f774ae531943b6929406706072a75a75b93ace40786b"
+    },
+    "train": {
+      "duplicate_ids": 0,
+      "duplicate_text_occurrences": 24,
+      "ids_present": 0,
+      "parser_counter": {
+        "pred_tree": 3377,
+        "well-formed": 922
+      },
+      "rows": 922,
+      "sha256": "d59e10133d2272e6daf4837ffe7236aa1f4f708af44142f4c48536e211ffdcc6",
+      "text_sha256": "09cfcdcddded2fb4d6c3c1bd3c8d54f93830a2828f19e93971f5fc9aad8421da"
+    },
+    "validation": {
+      "duplicate_ids": 0,
+      "duplicate_text_occurrences": 3,
+      "ids_present": 0,
+      "parser_counter": {
+        "pred_tree": 893,
+        "well-formed": 231
+      },
+      "rows": 231,
+      "sha256": "a9be8c5c3716456fb3caffa13f069feea6272a07a4fadce47265db07b30debb8",
+      "text_sha256": "181e084bf7c75801e1bae21467b38bc7bcb32c25eb40e2898062b93d7a52370d"
+    }
+  },
+  "leakage": {
+    "full_train_test": 18,
+    "full_train_validation": 12,
+    "full_validation_test": 3,
+    "shot_train_test": 1,
+    "shot_train_validation": 0
+  },
+  "schema": {
+    "entity.schema": {
+      "mapping": {},
+      "roles": [],
+      "sha256": "3aca8841a0525d36de14b9884753a76259d3adad5cf0c84e72988ce83ccff967",
+      "types": [
+        "other",
+        "organization",
+        "location",
+        "people"
+      ]
+    },
+    "event.schema": {
+      "mapping": {},
+      "roles": [],
+      "sha256": "3470a9d51834a60a8b709b30d2e205a879d9d28d1a0515068eafe838ffcaeda8",
+      "types": []
+    },
+    "record.schema": {
+      "mapping": {
+        "location": [
+          "located in"
+        ],
+        "organization": [
+          "organization in"
+        ],
+        "other": [],
+        "people": [
+          "work for",
+          "kill",
+          "live in"
+        ]
+      },
+      "roles": [
+        "located in",
+        "work for",
+        "organization in",
+        "kill",
+        "live in"
+      ],
+      "sha256": "efcac0112405e307aec133d4a289651ed48f93477b004b3fb2e29d1b34913e3d",
+      "types": [
+        "location",
+        "organization",
+        "other",
+        "people"
+      ]
+    },
+    "relation.schema": {
+      "mapping": {
+        "kill": [],
+        "live in": [],
+        "located in": [],
+        "organization in": [],
+        "work for": []
+      },
+      "roles": [
+        "organization",
+        "people",
+        "location"
+      ],
+      "sha256": "64eb41cc308717e5851984ad2ee124b4c68085bb9dfc3b72b9348958b1b34d62",
+      "types": [
+        "organization in",
+        "work for",
+        "located in",
+        "live in",
+        "kill"
+      ]
+    }
+  },
+  "shot": {
+    "test": {
+      "duplicate_ids": 0,
+      "duplicate_text_occurrences": 1,
+      "ids_present": 0,
+      "parser_counter": {
+        "pred_tree": 1079,
+        "well-formed": 288
+      },
+      "rows": 288,
+      "sha256": "91d6b666268bacf73ea9352f7111c2ef84a212374148bb357933555707811feb",
+      "text_sha256": "33a0f9f0422fb82e7554f774ae531943b6929406706072a75a75b93ace40786b"
+    },
+    "train": {
+      "association_counts": {
+        "kill": 10,
+        "live in": 15,
+        "located in": 11,
+        "organization in": 18,
+        "work for": 14
+      },
+      "duplicate_ids": 0,
+      "duplicate_text_occurrences": 2,
+      "ids_present": 0,
+      "parser_counter": {
+        "pred_tree": 181,
+        "well-formed": 50
+      },
+      "rows": 50,
+      "sha256": "5fecc7091bf7152d04a4eb43641933600f24f3af11995bc3e8f8d268fd43da7b",
+      "spot_counts": {
+        "location": 38,
+        "organization": 30,
+        "other": 18,
+        "people": 37
+      },
+      "text_sha256": "d6a13037e13168bee5fe5a173f5269d2ed9c706abe8b723a15577f259aa2b422"
+    },
+    "validation": {
+      "duplicate_ids": 0,
+      "duplicate_text_occurrences": 3,
+      "ids_present": 0,
+      "parser_counter": {
+        "pred_tree": 893,
+        "well-formed": 231
+      },
+      "rows": 231,
+      "sha256": "a9be8c5c3716456fb3caffa13f069feea6272a07a4fadce47265db07b30debb8",
+      "text_sha256": "181e084bf7c75801e1bae21467b38bc7bcb32c25eb40e2898062b93d7a52370d"
+    }
+  },
+  "status": "validated_with_warnings",
+  "warnings": [
+    {
+      "code": "UPSTREAM_TEXT_OVERLAP_ACROSS_SPLITS",
+      "details": {
+        "full_train_test": 18,
+        "full_train_validation": 12,
+        "full_validation_test": 3,
+        "shot_train_test": 1,
+        "shot_train_validation": 0
+      },
+      "policy": "record_without_manual_correction"
+    }
+  ]
+}

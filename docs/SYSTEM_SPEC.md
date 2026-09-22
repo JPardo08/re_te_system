@@ -9,6 +9,11 @@ than retroactively renaming a frozen release. The system contains no C1/C2/C3
 conditioning, translation, Hohfeld rescue logic, controlled generator,
 training, API, UI, semantic validator, or evaluation matching.
 
+The runtime/package contains no training implementation. Repository-level
+tooling under `scripts/reproductions/` may validate data and orchestrate
+training in a separately frozen upstream repository; it is not imported by the
+runtime package.
+
 mREBEL is the multilingual Spanish-compatible baseline. REBEL is an
 English-centric/monolingual predecessor evaluated directly on Spanish as an
 intentional out-of-primary-model-scope baseline. Both are `END_TO_END_TE`,
