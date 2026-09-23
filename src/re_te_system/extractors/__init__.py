@@ -3,6 +3,7 @@
 from re_te_system.extractors.base import Extractor
 from re_te_system.extractors.mock import (
     MockExtractor,
+    MockGenieExtractor,
     MockGoLLIEExtractor,
     MockPythiaExtractor,
     MockRebelExtractor,
@@ -12,6 +13,7 @@ from re_te_system.extractors.mock import (
 __all__ = [
     "Extractor",
     "MockExtractor",
+    "MockGenieExtractor",
     "MockGoLLIEExtractor",
     "MockPythiaExtractor",
     "MockRebelExtractor",

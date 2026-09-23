@@ -138,8 +138,36 @@ guideline hash, exact serialized prompt, Black policy/version, quantization
 native-schema runs use `language_status: supported`. GoLLIE is not Controlled
 C2.
 
+### Closed-schema constrained GenIE
+
+GenIE uses:
+
+```json
+{
+  "run_role": "baseline",
+  "model_family": "genie",
+  "task_class": "KBP_CLOSED_IE",
+  "target_schema_knowledge": "fixed_native_schema+kb_constraints",
+  "controlled_experiment_condition": "not_applicable",
+  "input_language": "en",
+  "language_status": "supported",
+  "native_schema": {
+    "inherited_from_model": true,
+    "scope": "fixed_native_schema+kb_constraints",
+    "constraint_profile": "unconstrained",
+    "entity_inventory_required": false,
+    "relation_inventory_required": false,
+    "formal_ontology": false
+  }
+}
+```
+
+Constrained profiles set `entity_inventory_required` and
+`relation_inventory_required` to true. Spanish input is
+`out_of_documented_training_scope`. GenIE is not C3.
+
 The backward-compatible `condition: C0`, `conditioning: none`, and
 `target_condition.id: C0` fields remain in the shared contract. For Pythia,
-UIE, and GoLLIE, they do **not** imply membership in the causal C0-C3
+UIE, GoLLIE, and GenIE, they do **not** imply membership in the causal C0-C3
 experiment. `controlled_experiment_condition: not_applicable` and each
 `task_class` are the authoritative classification fields.

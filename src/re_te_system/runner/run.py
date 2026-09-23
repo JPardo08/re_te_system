@@ -13,11 +13,13 @@ from re_te_system.contracts import (
     InputRecord,
     ParseIssue,
     ParseResult,
+    ParsedGenieOccurrence,
     ParsedGoLLIERecord,
     ParsedSpot,
     ParsedTriple,
     PREDICTION_CONTRACT_VERSION,
     Segment,
+    genie_occurrence_to_dict,
     gollie_record_to_dict,
     spot_to_dict,
     triple_to_dict,
@@ -230,6 +232,7 @@ def run_pipeline(
         aligned_structures_all: list[ParsedSpot] = []
         parsed_gollie_all: list[ParsedGoLLIERecord] = []
         aligned_gollie_all: list[ParsedGoLLIERecord] = []
+        parsed_genie_all: list[ParsedGenieOccurrence] = []
         parse_issues = []
         example_failed = False
         try:
@@ -272,6 +275,7 @@ def run_pipeline(
                 parse_issues.extend(parsed.issues)
                 parsed_structures_all.extend(parsed.structures)
                 parsed_gollie_all.extend(parsed.gollie_records)
+                parsed_genie_all.extend(parsed.genie_occurrences)
                 aligned_structures = parsed.structures
                 if structure_aligner is not None:
                     aligned_structures, alignment_issues = structure_aligner(
@@ -330,7 +334,9 @@ def run_pipeline(
         parsed_tuple = tuple(parsed_all)
         normalized = normalize_triples(parsed_tuple)
         validated = validate_structural(normalized, tuple(parse_issues))
-        stats["parsed_structures"] += len(parsed_structures_all) + len(parsed_gollie_all)
+        stats["parsed_structures"] += (
+            len(parsed_structures_all) + len(parsed_gollie_all) + len(parsed_genie_all)
+        )
         stats["parsed_triples"] += len(parsed_tuple)
         stats["parse_failures"] += sum(
             issue.code
@@ -344,6 +350,10 @@ def run_pipeline(
                 "UNPARSEABLE_CHUNK",
                 "INVALID_GOLLIE_SYNTAX",
                 "UNSAFE_AST_NODE",
+                "MALFORMED_GENIE",
+                "INCOMPLETE_TRIPLET",
+                "UNEXPECTED_CONTROL_TOKEN",
+                "EMPTY_STRUCTURE",
             }
             for issue in parse_issues
         )
@@ -390,6 +400,10 @@ def run_pipeline(
             ]
             prediction["aligned_structures"] = [
                 spot_to_dict(spot) for spot in aligned_structures_all
+            ]
+        if parsed_genie_all:
+            prediction["parsed_genie_occurrences"] = [
+                genie_occurrence_to_dict(item) for item in parsed_genie_all
             ]
         if record_aligner is not None or record_projector is not None:
             prediction["parsed_gollie_records"] = [

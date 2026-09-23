@@ -36,6 +36,10 @@ gollie = [
   "torch>=2.2",
   "transformers>=4.40,<5",
 ]
+genie = [
+  "torch>=2.2",
+  "transformers>=4.40,<5",
+]
 dev = ["black>=24.8,<25", "pytest>=8,<9"]
 
 [project.scripts]

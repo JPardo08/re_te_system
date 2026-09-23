@@ -11,8 +11,10 @@ Wikidata-style native relation schemas. Pythia/SPACE-KBP is a separate
 `KBP_DOMAIN_BASELINE` tied to its fixed space-mission ontology. UIE is a
 `UNIVERSAL_IE` baseline receiving a dynamic runtime structural schema. GoLLIE
 is a separate `GUIDELINE_FOLLOWING_UIE_BASELINE` receiving structural schema
-plus definitions/guidelines; it is not Controlled C2. None is a controlled
-C0/C1/C2/C3 condition, and none maps native output to Hohfeld.
+plus definitions/guidelines; it is not Controlled C2. GenIE is a separate
+`CLOSED_SCHEMA_CONSTRAINED_IE_BASELINE` / `KBP_CLOSED_IE` comparator with
+fixed native schema plus optional KB constraints; it is not C3. None is a
+controlled C0/C1/C2/C3 condition, and none maps native output to Hohfeld.
 
 mREBEL is multilingual and receives the required `es_XX`/`tp_XX` runtime
 formatting. REBEL is English-centric/monolingual; Spanish text is passed
@@ -27,7 +29,8 @@ a C0→C3 conditioning effect. Pythia manifests add
 `condition: C0` field must not be interpreted causally. UIE uses the same
 explicit `not_applicable` marker and does not establish arbitrary-schema
 zero-shot reliability. GoLLIE uses the same `not_applicable` marker and is
-not part of same-model causal contrast.
+not part of same-model causal contrast. GenIE uses the same marker; hard
+inventory constraints are not formal ontology reasoning.
 
 ## Development environment
 
@@ -39,7 +42,7 @@ Python 3.11 or newer.
 conda create -n re_te_system_312 python=3.12 -y
 conda activate re_te_system_312
 python -m pip install --upgrade pip
-python -m pip install -e ".[dev,mrebel,rebel,pythia,uie,gollie]"
+python -m pip install -e ".[dev,mrebel,rebel,pythia,uie,gollie,genie]"
 pytest
 ```
 
@@ -55,7 +58,7 @@ mock prompt serialization requires the pinned Black dependency included in
 `dev` and `gollie`. Pythia Turtle parsing requires its optional RDFLib
 dependency. For development without ML dependencies, use
 `python -m pip install -e ".[dev]"`. The semantically distinct `mrebel`,
-`rebel`, `pythia`, `uie`, and `gollie` extras can be combined with `dev`
+`rebel`, `pythia`, `uie`, `gollie`, and `genie` extras can be combined with `dev`
 independently:
 
 ```bash
@@ -64,6 +67,7 @@ python -m pip install -e ".[dev,rebel]"
 python -m pip install -e ".[dev,pythia]"
 python -m pip install -e ".[dev,uie]"
 python -m pip install -e ".[dev,gollie]"
+python -m pip install -e ".[dev,genie]"
 ```
 
 Use `--extractor rebel-mock` for the dependency-free REBEL contract fixture, or
@@ -87,6 +91,11 @@ dependency included in `dev` and `gollie`. FlashAttention is not a core or
 `dev` dependency. Real GoLLIE inference still requires a separate NVIDIA CUDA
 GPU environment with official FlashAttention and has no CPU/MPS fallback in
 P0. See `docs/GOLLIE_BASELINE.md`.
+
+Use `--extractor genie-mock` for the weight-free GenIE contract. The optional
+`genie` extra is for a future direct BART runtime only; Lightning and Hydra
+are not installed. P0 does not download `genie_r.ckpt`. See
+`docs/GENIE_BASELINE.md`.
 
 ## Mock document run
 

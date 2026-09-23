@@ -184,3 +184,25 @@ and in `EXTERNAL_SYSTEMS_AUDIT.md` are not rewritten.
 GoLLIE is an external `UNIVERSAL_IE` baseline reported as
 `GUIDELINE_FOLLOWING_UIE_BASELINE`. It is not Controlled C2 and is not a
 controlled C0-C3 condition. See `GOLLIE_BASELINE.md`.
+
+## GenIE clean-room integration (2026-09-23)
+
+The clean-room GenIE adapter does not import `_legacy/GenIE` runtime code.
+Official Carson RAW strings used by the weight-free fixture are taken from
+the audited official notebook and labeled
+`OFFICIAL_NOTEBOOK_RECORDED_OUTPUT`. Historical audit conclusions are not
+rewritten.
+
+- `GeniePL` / `GenieHF` — **ADAPT_CONCEPT**. P0 uses the shared Extractor
+  protocol and does not load Lightning.
+- Official `textual_triplets` set conversion — **NOT MIGRATED**.
+- Last-write-wins surface-form ID collisions — **NOT MIGRATED**.
+- Official pickle tries in unit tests — **NOT MIGRATED**. Future runtime
+  should prefer official `*_original_strings.jsonl` plus the pinned tokenizer.
+- Relation-only constrained decoding — **NOT MIGRATED**; it would be
+  `NON_NATIVE_ABLATION`.
+- Automatic 4.9 GB checkpoint download — **NOT MIGRATED**.
+
+GenIE is an external `KBP_CLOSED_IE` baseline reported as
+`CLOSED_SCHEMA_CONSTRAINED_IE_BASELINE`. Hard inventory constraints are not
+formal ontology reasoning. See `GENIE_BASELINE.md`.

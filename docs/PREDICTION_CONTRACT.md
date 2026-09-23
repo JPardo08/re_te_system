@@ -47,6 +47,13 @@ these fields and do not fabricate canonical triples. Alignment is exact and
 case-sensitive (`exact`, `ambiguous`, or `not_found`) and never forces a
 first match.
 
+GenIE adds `parsed_genie_occurrences`. Each occurrence keeps textual
+subject/relation/object, occurrence index, completeness, optional inventory
+status, and optional later ID fields. RAW remains the exact generated string.
+Incomplete suffixes stay visible and are not silently dropped. Alternate
+beams live in `raw.segments[].generation_metadata.beams` with rank, RAW, and
+log probability. Evaluator export uses `top_score_beam0`.
+
 Violations have `code`, `severity` (`soft` or `hard`), message, and optional
 triple index. Status is `ok`, `soft_fail`, or `hard_fail`.
 

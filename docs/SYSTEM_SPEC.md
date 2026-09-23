@@ -2,9 +2,10 @@
 
 ## Scope
 
-The current system preserves the P0.5 contracts and contains five external
-baseline adapters: `mREBEL`, `REBEL`, Pythia/SPACE-KBP, UIE, and GoLLIE.
-Deterministic fixtures cover all five output families. The P0.5 naming is
+The current system preserves the P0.5 contracts and contains six external
+baseline adapters: `mREBEL`, `REBEL`, Pythia/SPACE-KBP, UIE, GoLLIE, and
+GenIE.
+Deterministic fixtures cover all six output families. The P0.5 naming is
 retained rather than retroactively renaming a frozen release. The system
 contains no C1/C2/C3 conditioning, translation, Hohfeld rescue logic,
 controlled generator, training, API, UI, semantic validator, or evaluation
@@ -37,6 +38,12 @@ Controlled C2, not Hohfeld-native, and not a controlled condition.
 Comparisons among external baselines are outside the future controlled C0–C3
 causal experiment.
 
+GenIE is a `KBP_CLOSED_IE` baseline reported as
+`CLOSED_SCHEMA_CONSTRAINED_IE_BASELINE`. It inherits a fixed native schema and
+may apply hard entity/relation inventory constraints. Those constraints are
+not formal ontology reasoning, not UIE, not Hohfeld-native, and not a
+controlled C0-C3 condition.
+
 The scientific input unit is a document/article. The loader projects each
 benchmark JSONL row to exactly `example_id`, `document_id`, and `text`; nested
 annotations are inaccessible to extraction. Configured windows are internal
@@ -48,12 +55,15 @@ segments and all triples aggregate back into one document prediction.
    metadata.
 2. PARSED dispatches to the matching format-specific parser: mREBEL
    control tokens, REBEL control tokens, conservative RDF Turtle,
-   conservative UIE SEL, or safe AST GoLLIE constructor lists. Parsers
+   conservative UIE SEL, safe AST GoLLIE constructor lists, or conservative
+   GenIE `<sub>/<rel>/<obj>/<et>` markup. Parsers
    preserve deterministic occurrence order and duplicates and report
    malformed output. Turtle, SEL, and GoLLIE parsing never repair RAW. UIE
    also retains typed Spot-Association structures before binary relation
    projection. GoLLIE retains typed class records before binary relation
-   projection and never executes model output.
+   projection and never executes model output. GenIE retains ordered typed
+   occurrences, including incomplete suffixes, before projecting complete
+   textual triples. ID mapping is optional and separate.
 3. NORMALIZED applies Unicode NFC, canonical whitespace, and canonical nulls
    only. RDF literal lexical values are preserved because internal whitespace
    may be semantically significant.
@@ -70,8 +80,8 @@ Null/ambiguous alignment never removes a prediction.
 ## Windowing
 
 `NONE`, `CHARACTER`, and tokenizer-aware `TOKEN` strategies are explicit.
-Maximum units, overlap, and mechanism are manifest fields. All five real
-adapters default to `TOKEN` with their configured effective input limit; mocks
+Maximum units, overlap, and mechanism are manifest fields. Real adapters
+default to `TOKEN` with their configured effective input limit; mocks
 default to `NONE`. The real GoLLIE adapter additionally requires CUDA and
 FlashAttention at initialization; P0 has no CPU/MPS fallback. Pythia derives its limit from model configuration minus the
 generation budget and records truncation explicitly. The legacy 1,200-character

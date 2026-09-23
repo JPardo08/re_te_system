@@ -98,11 +98,31 @@ class ParsedGoLLIERecord:
 
 
 @dataclass(frozen=True)
+class ParsedGenieOccurrence:
+    subject_text: str
+    relation_text: str
+    object_text: str
+    occurrence_index: int
+    complete: bool = True
+    subject_inventory_status: str | None = None
+    relation_inventory_status: str | None = None
+    object_inventory_status: str | None = None
+    subject_id: str | None = None
+    relation_id: str | None = None
+    object_id: str | None = None
+    subject_id_status: str | None = None
+    relation_id_status: str | None = None
+    object_id_status: str | None = None
+    segment_id: str | None = None
+
+
+@dataclass(frozen=True)
 class ParseResult:
     triples: tuple[ParsedTriple, ...]
     issues: tuple[ParseIssue, ...] = ()
     structures: tuple[ParsedSpot, ...] = ()
     gollie_records: tuple[ParsedGoLLIERecord, ...] = ()
+    genie_occurrences: tuple[ParsedGenieOccurrence, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -180,6 +200,26 @@ def spot_to_dict(spot: ParsedSpot) -> dict[str, Any]:
         "span": spot.span,
         "span_end": spot.span_end,
         "span_start": spot.span_start,
+    }
+
+
+def genie_occurrence_to_dict(occurrence: ParsedGenieOccurrence) -> dict[str, Any]:
+    return {
+        "complete": occurrence.complete,
+        "object_id": occurrence.object_id,
+        "object_id_status": occurrence.object_id_status,
+        "object_inventory_status": occurrence.object_inventory_status,
+        "object_text": occurrence.object_text,
+        "occurrence_index": occurrence.occurrence_index,
+        "relation_id": occurrence.relation_id,
+        "relation_id_status": occurrence.relation_id_status,
+        "relation_inventory_status": occurrence.relation_inventory_status,
+        "relation_text": occurrence.relation_text,
+        "segment_id": occurrence.segment_id,
+        "subject_id": occurrence.subject_id,
+        "subject_id_status": occurrence.subject_id_status,
+        "subject_inventory_status": occurrence.subject_inventory_status,
+        "subject_text": occurrence.subject_text,
     }
 
 

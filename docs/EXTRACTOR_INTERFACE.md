@@ -15,7 +15,7 @@ class Extractor(Protocol):
 and optional segment boundaries. It contains no Gold, evaluator, Hohfeld,
 schema, or future conditioning fields.
 
-For Pythia, UIE, and GoLLIE, the inherited context `condition` remains a
+For Pythia, UIE, GoLLIE, and GenIE, the inherited context `condition` remains a
 compatibility value, not a controlled-experiment assignment. The manifest
 marks `controlled_experiment_condition: not_applicable`.
 
@@ -24,7 +24,8 @@ generation metadata. Parsing, normalization, validation, persistence, and
 evaluation export are downstream concerns. The shared runner receives the
 matching format-specific parser callable. Current dispatches are
 `parse_mrebel`, `parse_rebel`, `parse_turtle` for Pythia/SPACE-KBP,
-`parse_sel` for UIE, and `parse_gollie` for GoLLIE. UIE additionally injects
+`parse_sel` for UIE, `parse_gollie` for GoLLIE, and `parse_genie` for GenIE.
+UIE additionally injects
 typed-structure alignment and binary projection callables because SEL is not
 natively a triple stream. GoLLIE injects typed-record alignment and relation
 projection because constructor lists are not a triple stream and must not be
@@ -44,6 +45,11 @@ GoLLIE receives its own baseline-specific guideline schema. The extractor
 emits an exact decoded constructor-list continuation; safe AST parsing, exact
 alignment, and binary relation projection remain downstream. GoLLIE schema
 mechanics are not Controlled C2 and are not the controlled C0-C3
+conditioning layer.
+GenIE receives a named constraint profile and optional inventories. The
+extractor emits exact decoded `<sub>/<rel>/<obj>/<et>` markup; ordered
+parsing, optional ID mapping, and beam metadata remain downstream. GenIE
+constraint mechanics are not C3 and are not the controlled C0-C3
 conditioning layer.
 A future controlled extractor can implement the protocol without depending on
 any baseline or changing the prediction stages.

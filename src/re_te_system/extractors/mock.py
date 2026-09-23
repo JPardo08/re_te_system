@@ -4,8 +4,28 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from re_te_system.conditioning.genie_constraints import (
+    GenIEConstraintSpec,
+    unconstrained_spec,
+)
 from re_te_system.conditioning.gollie_schema import GoLLIESchema
 from re_te_system.contracts import ExtractionContext, RawExtractionResult
+from re_te_system.extractors.genie import (
+    CANONICAL_ARCHITECTURE,
+    CANONICAL_CHECKPOINT_MD5,
+    CANONICAL_CHECKPOINT_NAME,
+    CANONICAL_TOKENIZER_ID,
+    CANONICAL_TOKENIZER_REVISION,
+    CHECKPOINT_LOADING_FORM,
+    CHECKPOINT_LOADING_STATUS,
+    EVALUATOR_BEAM_POLICY,
+    GENIE_DOCUMENTED_LANGUAGE,
+    GENIE_SCIENTIFIC_ROLE,
+    MODERNIZED_LOADING_STATUS,
+    OUTPUT_SOURCE_OFFICIAL_NOTEBOOK,
+    official_notebook_log_prob_for_profile,
+    official_notebook_raw_for_profile,
+)
 from re_te_system.extractors.gollie import (
     GOLLIE_DOCUMENTED_LANGUAGE,
     GOLLIE_MERGED_FULL_MODEL,
@@ -170,6 +190,66 @@ class MockGoLLIEExtractor:
                 "scientific_role": GOLLIE_SCIENTIFIC_ROLE,
                 "truncated_input": False,
                 "weight_license": GOLLIE_WEIGHT_LICENSE,
+            },
+        )
+
+
+@dataclass
+class MockGenieExtractor:
+    """GenIE-shaped fixture preserving official notebook RAW without weights."""
+
+    model_name: str = "mock/genie-contract"
+    model_revision: str = CANONICAL_CHECKPOINT_MD5
+    constraint_spec: GenIEConstraintSpec = unconstrained_spec()
+    outputs: dict[str, str] = field(default_factory=dict)
+    fail_on: set[str] = field(default_factory=set)
+
+    def extract(self, text: str, context: ExtractionContext) -> RawExtractionResult:
+        if context.input_id in self.fail_on:
+            raise RuntimeError("configured mock GenIE failure")
+        profile = self.constraint_spec.profile
+        output = self.outputs.get(
+            context.input_id,
+            official_notebook_raw_for_profile(profile),
+        )
+        log_prob = official_notebook_log_prob_for_profile(profile)
+        beams = [
+            {"beam_rank": 0, "log_prob": log_prob, "raw": output},
+        ]
+        return RawExtractionResult(
+            model_output=output,
+            generation_metadata={
+                "architecture": CANONICAL_ARCHITECTURE,
+                "beams": beams,
+                "checkpoint": {
+                    "loading_form": CHECKPOINT_LOADING_FORM,
+                    "loading_status": CHECKPOINT_LOADING_STATUS,
+                    "md5": CANONICAL_CHECKPOINT_MD5,
+                    "modernized_loading_status": MODERNIZED_LOADING_STATUS,
+                    "name": CANONICAL_CHECKPOINT_NAME,
+                },
+                "constraint": self.constraint_spec.manifest_metadata(),
+                "constraint_decoding": self.constraint_spec.constrained,
+                "control_tags_are_added_special_tokens": False,
+                "deterministic": True,
+                "documented_language": GENIE_DOCUMENTED_LANGUAGE,
+                "effective_input_limit": 256,
+                "evaluator_beam_policy": EVALUATOR_BEAM_POLICY,
+                "input_token_count": len(text.split()),
+                "max_input_length": 256,
+                "max_output_length": 256,
+                "model_max_length": 256,
+                "number_of_sequences": len(beams),
+                "output_reached_limit": False,
+                "output_source": OUTPUT_SOURCE_OFFICIAL_NOTEBOOK,
+                "output_token_count": len(output.split()),
+                "scientific_role": GENIE_SCIENTIFIC_ROLE,
+                "seed": 123,
+                "selected_beam_policy": EVALUATOR_BEAM_POLICY,
+                "selected_beam_rank": 0,
+                "tokenizer": CANONICAL_TOKENIZER_ID,
+                "tokenizer_revision": CANONICAL_TOKENIZER_REVISION,
+                "truncated_input": False,
             },
         )
 

@@ -7,8 +7,35 @@ from functools import partial
 import json
 from pathlib import Path
 
+from re_te_system.conditioning.genie_constraints import (
+    PROFILE_CUSTOM_FULL,
+    PROFILE_LARGE,
+    PROFILE_SMALL,
+    PROFILE_UNCONSTRAINED,
+    GenIEConstraintSpec,
+    closed_schema_spec,
+    named_schema_spec,
+    unconstrained_spec,
+)
 from re_te_system.conditioning.gollie_schema import GoLLIESchema
 from re_te_system.conditioning.uie_schema import UIESchema
+from re_te_system.extractors.genie import (
+    CANONICAL_ARCHITECTURE,
+    CANONICAL_CHECKPOINT_MD5,
+    CANONICAL_CHECKPOINT_NAME,
+    CANONICAL_TOKENIZER_ID,
+    CANONICAL_TOKENIZER_REVISION,
+    CHECKPOINT_LOADING_FORM,
+    CHECKPOINT_LOADING_STATUS,
+    EVALUATOR_BEAM_POLICY,
+    GENIE_DOCUMENTED_LANGUAGE,
+    GENIE_SCIENTIFIC_ROLE,
+    GENIE_TARGET_SCHEMA_KNOWLEDGE,
+    GENIE_TASK_CLASS,
+    MODERNIZED_LOADING_STATUS,
+    GenIEConfig,
+    GenIEExtractor,
+)
 from re_te_system.extractors.gollie import (
     GOLLIE_DOCUMENTED_LANGUAGE,
     GOLLIE_MERGED_FULL_MODEL,
@@ -19,6 +46,7 @@ from re_te_system.extractors.gollie import (
 )
 from re_te_system.extractors.mock import (
     MockExtractor,
+    MockGenieExtractor,
     MockGoLLIEExtractor,
     MockPythiaExtractor,
     MockRebelExtractor,
@@ -28,6 +56,7 @@ from re_te_system.extractors.mrebel import MRebelConfig, MRebelExtractor
 from re_te_system.extractors.pythia import PythiaConfig, PythiaSpaceKBPExtractor
 from re_te_system.extractors.rebel import RebelConfig, RebelExtractor
 from re_te_system.extractors.uie import UIEConfig, UIEExtractor
+from re_te_system.parsing.genie import parse_genie
 from re_te_system.parsing.gollie import (
     align_gollie_records,
     parse_gollie,
@@ -48,6 +77,75 @@ from re_te_system.runner.run import (
     load_hohfeld_documents,
     run_pipeline,
 )
+
+
+def _inventory_strings(path: str | None) -> tuple[str, ...]:
+    if not path:
+        return ()
+    values = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        item = line.strip()
+        if not item:
+            continue
+        if item.startswith('"') and item.endswith('"'):
+            item = json.loads(item)
+        values.append(item)
+    return tuple(values)
+
+
+def _genie_constraint_spec(args: argparse.Namespace) -> GenIEConstraintSpec:
+    profile = args.genie_constraint_profile
+    if profile == PROFILE_UNCONSTRAINED:
+        return unconstrained_spec()
+    if profile in {PROFILE_SMALL, PROFILE_LARGE}:
+        return named_schema_spec(profile)
+    entities = _inventory_strings(args.genie_entity_inventory)
+    relations = _inventory_strings(args.genie_relation_inventory)
+    if not entities or not relations:
+        raise SystemExit(
+            "custom_full GenIE constraints require --genie-entity-inventory "
+            "and --genie-relation-inventory"
+        )
+    return closed_schema_spec(entities, relations)
+
+
+def _genie_language_status(input_language: str) -> str:
+    return (
+        "supported"
+        if input_language == "en"
+        else "out_of_documented_training_scope"
+    )
+
+
+def _genie_model_metadata(
+    constraint_spec: GenIEConstraintSpec,
+    *,
+    device: str,
+    dtype: str,
+    tokenizer: str,
+) -> dict:
+    return {
+        "architecture": CANONICAL_ARCHITECTURE,
+        "checkpoint": {
+            "loading_form": CHECKPOINT_LOADING_FORM,
+            "loading_status": CHECKPOINT_LOADING_STATUS,
+            "md5": CANONICAL_CHECKPOINT_MD5,
+            "modernized_loading_status": MODERNIZED_LOADING_STATUS,
+            "name": CANONICAL_CHECKPOINT_NAME,
+        },
+        "constraint": constraint_spec.manifest_metadata(),
+        "constraint_decoding": constraint_spec.constrained,
+        "device": device,
+        "documented_language": GENIE_DOCUMENTED_LANGUAGE,
+        "dtype": dtype,
+        "evaluator_beam_policy": EVALUATOR_BEAM_POLICY,
+        "formal_ontology": False,
+        "parser_policy": "conservative_genie_v1",
+        "scientific_role": GENIE_SCIENTIFIC_ROLE,
+        "selected_beam_policy": EVALUATOR_BEAM_POLICY,
+        "tokenizer": tokenizer,
+        "tokenizer_revision": CANONICAL_TOKENIZER_REVISION,
+    }
 
 
 def _prefixes(values: list[str]) -> dict[str, str]:
@@ -75,11 +173,13 @@ def build_parser() -> argparse.ArgumentParser:
             "pythia-mock",
             "uie-mock",
             "gollie-mock",
+            "genie-mock",
             "mrebel",
             "rebel",
             "pythia",
             "uie",
             "gollie",
+            "genie",
         ),
         default="mock",
     )
@@ -98,6 +198,21 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--uie-schema-file")
     run.add_argument("--gollie-schema-file")
     run.add_argument("--gollie-max-new-tokens", type=int, default=128)
+    run.add_argument(
+        "--genie-constraint-profile",
+        choices=(
+            PROFILE_UNCONSTRAINED,
+            PROFILE_SMALL,
+            PROFILE_LARGE,
+            PROFILE_CUSTOM_FULL,
+        ),
+        default=PROFILE_UNCONSTRAINED,
+    )
+    run.add_argument("--genie-entity-inventory")
+    run.add_argument("--genie-relation-inventory")
+    run.add_argument("--genie-checkpoint-path")
+    run.add_argument("--genie-num-beams", type=int, default=10)
+    run.add_argument("--authorize-checkpoint-load", action="store_true")
     run.add_argument("--max-new-tokens", type=int, default=512)
     run.add_argument("--max-length", type=int, default=512)
     run.add_argument("--num-beams", type=int, default=3)
@@ -297,6 +412,37 @@ def main(argv: list[str] | None = None) -> int:
             "schema_version": schema.schema_version,
             "scope": "dynamic_runtime_guideline_schema",
         }
+    elif args.extractor == "genie-mock":
+        constraint_spec = _genie_constraint_spec(args)
+        extractor = MockGenieExtractor(constraint_spec=constraint_spec)
+        parse_output = parse_genie
+        generation = GenIEConfig(
+            constraint_profile=constraint_spec.profile,
+            num_beams=args.genie_num_beams,
+            num_return_sequences=min(args.genie_num_beams, 2),
+            seed=args.seed,
+        ).generation_config()
+        strategy = args.window_strategy or "NONE"
+        model_metadata = _genie_model_metadata(
+            constraint_spec,
+            device="none",
+            dtype="none",
+            tokenizer="mock",
+        )
+        model_family = "genie"
+        language_status = _genie_language_status(args.input_language)
+        task_class = GENIE_TASK_CLASS
+        controlled_experiment_condition = "not_applicable"
+        target_schema_knowledge = GENIE_TARGET_SCHEMA_KNOWLEDGE
+        native_schema = {
+            "constraint_profile": constraint_spec.profile,
+            "entity_inventory_required": constraint_spec.entity_inventory_required,
+            "formal_ontology": False,
+            "id": "wikidata_closed_schema",
+            "inherited_from_model": True,
+            "relation_inventory_required": constraint_spec.relation_inventory_required,
+            "scope": "fixed_native_schema+kb_constraints",
+        }
     elif args.extractor == "mrebel":
         config = MRebelConfig(
             model_name=args.model_name or "Babelscape/mrebel-large",
@@ -442,7 +588,7 @@ def main(argv: list[str] | None = None) -> int:
             "schema_hash": schema.stable_hash(),
             "schema_version": schema.schema_version,
         }
-    else:
+    elif args.extractor == "gollie":
         if not args.gollie_schema_file:
             raise SystemExit("--gollie-schema-file is required for GoLLIE extractors")
         schema = GoLLIESchema.read_json(args.gollie_schema_file)
@@ -502,6 +648,43 @@ def main(argv: list[str] | None = None) -> int:
             "schema_hash": schema.schema_hash(),
             "schema_version": schema.schema_version,
             "scope": "dynamic_runtime_guideline_schema",
+        }
+    else:
+        constraint_spec = _genie_constraint_spec(args)
+        config = GenIEConfig(
+            checkpoint_path=args.genie_checkpoint_path,
+            constraint_profile=constraint_spec.profile,
+            num_beams=args.genie_num_beams,
+            num_return_sequences=args.genie_num_beams,
+            seed=args.seed,
+            device=args.device,
+            dtype=args.dtype,
+            local_files_only=True,
+            authorize_checkpoint_load=args.authorize_checkpoint_load,
+        )
+        extractor = GenIEExtractor(config=config, constraint_spec=constraint_spec)
+        parse_output = parse_genie
+        generation = config.generation_config()
+        strategy = args.window_strategy or "TOKEN"
+        model_metadata = _genie_model_metadata(
+            constraint_spec,
+            device=str(extractor.device),
+            dtype=config.dtype,
+            tokenizer=extractor.tokenizer_name,
+        )
+        model_family = "genie"
+        language_status = _genie_language_status(args.input_language)
+        task_class = GENIE_TASK_CLASS
+        controlled_experiment_condition = "not_applicable"
+        target_schema_knowledge = GENIE_TARGET_SCHEMA_KNOWLEDGE
+        native_schema = {
+            "constraint_profile": constraint_spec.profile,
+            "entity_inventory_required": constraint_spec.entity_inventory_required,
+            "formal_ontology": False,
+            "id": "wikidata_closed_schema",
+            "inherited_from_model": True,
+            "relation_inventory_required": constraint_spec.relation_inventory_required,
+            "scope": "fixed_native_schema+kb_constraints",
         }
     maximum = args.window_max_units
     if strategy == "TOKEN" and maximum is None:

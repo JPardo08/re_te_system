@@ -647,3 +647,20 @@ rankings, candidate shortlist, or historical conclusions above.
   command is prepared but not executed.
 
 See `GOLLIE_BASELINE.md` for the current technical policy.
+
+- GenIE clean-room adapter, conservative ordered parser, tiny trie / state
+  machine, and named constraint profiles: implemented.
+- Selected checkpoint identity: `genie_r.ckpt` / Zenodo `6139236` /
+  MD5 `c214da56b6e5d5bd259e0cbe826d92f7`. Weights were not downloaded.
+- Scientific role: `CLOSED_SCHEMA_CONSTRAINED_IE_BASELINE`;
+  `task_class: KBP_CLOSED_IE`;
+  `controlled_experiment_condition: not_applicable`.
+- Target knowledge: `FIXED_NATIVE_SCHEMA` + `KB_CONSTRAINTS`.
+- GenIE is not C3 and is not part of same-model causal contrast.
+- Official notebook Carson fixtures and official string-inventory preference:
+  recorded. Official tries include `*_original_strings.jsonl`.
+- Real native smoke: `REAL_GENIE_NATIVE_SMOKE = BLOCKED_RESOURCE`.
+  `checkpoint_loading_status = not_real_smoked`.
+  `modernized_loading_status = unverified`.
+
+See `GENIE_BASELINE.md` for the current technical policy.
