@@ -4,7 +4,8 @@ Integration date: 2026-09-22
 Role: `STRUCTURAL_SCHEMA_GUIDED_UIE_BASELINE`
 Task class: `UNIVERSAL_IE`
 `UIE_ADAPTER_READY = YES`
-`REAL_UIE_SMOKE = PENDING_GPU`
+`REAL_UIE_NATIVE_POSITIVE_SMOKE = FAIL`
+`UIE_SCIENTIFIC_BASELINE_READY = PARTIAL`
 
 ## Scientific role and restrictions
 
@@ -387,15 +388,26 @@ No Hohfeld inference or fine-tuning is performed in P0.
 
 ## Runtime and smoke status
 
-The clean-room code path is covered entirely by weight-free fixtures. No UIE
-weights were downloaded into the main environment.
+The clean-room code path is covered by weight-free fixtures and one real
+canonical-runtime CPU smoke. The pinned checkpoint was downloaded into the
+repository-local ignored Hugging Face cache.
 
-The legacy CPU smoke demonstrated technical feasibility on an Apple M2 with
-16 GB RAM, but produced an empty valid SEL tree. Before scientific use, require
-a non-empty native positive smoke on suitable infrastructure such as CESVIMA
-or INESData GPU.
+The real smoke used the fixed documented MULTAN relation example, native
+schema, deterministic generation, and no constraints. Loading, generation,
+RAW persistence, parsing, and artifact/manifest creation succeeded, but the
+model emitted:
 
-GPU is not required for P0 code readiness.
+```text
+<pad><extra_id_0><extra_id_1></s>
+```
+
+No Spot-Association structure or binary relation was produced. The protocol
+was not modified after the result. Evidence indicates `uie-base-en` is a
+pretrained base checkpoint intended for downstream task fine-tuning, while the
+legacy standalone helper defaults to a task-specific ABSA model directory.
+
+CPU execution was practical; GPU is neither the blocker nor required for P0
+code readiness. See `UIE_REAL_NATIVE_SMOKE.md`.
 
 ## Comparison restrictions
 

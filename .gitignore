@@ -7,3 +7,6 @@ dist/
 build/
 *.egg-info/
 runs/
+
+# Local UIE deterministic-reproduction evidence
+artifacts/uie_conll04_determinism/

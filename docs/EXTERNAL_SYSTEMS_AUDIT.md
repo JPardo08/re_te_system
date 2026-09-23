@@ -618,7 +618,10 @@ snapshot or its original decisions:
 - UIE checkpoint/revision and CC BY-NC-SA metadata: pinned and documented.
 - UIE custom-schema interface: implemented; unseen-schema zero-shot scientific
   support remains `UNKNOWN`.
-- UIE main-environment positive smoke: pending suitable GPU/native validation;
-  the legacy CPU empty-tree run is contract evidence only.
+- UIE canonical-runtime CPU smoke: model/artifact pipeline succeeded, but the
+  fixed native example produced an empty SEL tree. Positive-smoke status is
+  `FAIL`; scientific-baseline status remains `PARTIAL`. Evidence indicates the
+  released base checkpoint expects downstream task fine-tuning rather than
+  serving as a task-fine-tuned RE checkpoint.
 
 See `PYTHIA_BASELINE.md` and `UIE_BASELINE.md` for current technical policy.

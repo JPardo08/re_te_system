@@ -13,6 +13,7 @@ from re_te_system.conditioning.uie_schema import (
     TYPE_START,
     UIESchema,
 )
+from re_te_system.cli import main as cli_main
 from re_te_system.contracts import ExtractionContext, InputRecord
 from re_te_system.extractors.base import Extractor
 from re_te_system.extractors.mock import MockUIEExtractor
@@ -366,6 +367,48 @@ def test_manifest_identifies_uie_outside_controlled_conditions(tmp_path: Path) -
     assert manifest["language_status"] == "out_of_documented_training_scope"
     assert manifest["native_schema"]["scope"] == "dynamic_runtime_structural_schema"
     assert manifest["model"]["constraint_decoding"] is False
+
+
+def test_uie_cli_marks_native_english_as_supported(tmp_path: Path) -> None:
+    documents = tmp_path / "documents.jsonl"
+    documents.write_text(
+        json.dumps({"document_id": "native", "source_text": "Native English text."})
+        + "\n"
+    )
+    schema_file = tmp_path / "schema.json"
+    schema_file.write_text(
+        json.dumps(
+            {
+                "schema_id": "native",
+                "spot_labels": ["entity"],
+                "association_labels": [],
+                "spot_to_association": {"entity": []},
+            }
+        )
+    )
+    output = tmp_path / "output"
+    assert (
+        cli_main(
+            [
+                "run",
+                "--extractor",
+                "uie-mock",
+                "--documents",
+                str(documents),
+                "--output-root",
+                str(output),
+                "--uie-schema-file",
+                str(schema_file),
+                "--input-language",
+                "en",
+            ]
+        )
+        == 0
+    )
+    manifest_path = next(output.glob("run-*/manifest.json"))
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest["input_language"] == "en"
+    assert manifest["language_status"] == "supported"
 
 
 def test_custom_hohfeld_labels_are_interface_fixture_not_capability_claim(

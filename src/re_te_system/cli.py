@@ -211,7 +211,11 @@ def main(argv: list[str] | None = None) -> int:
             "zero_shot_unseen_schema_supported": "unknown",
         }
         model_family = "uie"
-        language_status = "out_of_documented_training_scope"
+        language_status = (
+            "supported"
+            if args.input_language == "en"
+            else "out_of_documented_training_scope"
+        )
         task_class = "UNIVERSAL_IE"
         controlled_experiment_condition = "not_applicable"
         target_schema_knowledge = "structural_schema"
@@ -352,7 +356,11 @@ def main(argv: list[str] | None = None) -> int:
             "zero_shot_unseen_schema_supported": "unknown",
         }
         model_family = "uie"
-        language_status = "out_of_documented_training_scope"
+        language_status = (
+            "supported"
+            if args.input_language == "en"
+            else "out_of_documented_training_scope"
+        )
         task_class = "UNIVERSAL_IE"
         controlled_experiment_condition = "not_applicable"
         target_schema_knowledge = "structural_schema"
