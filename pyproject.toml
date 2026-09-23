@@ -31,7 +31,12 @@ uie = [
   "torch>=2.2",
   "transformers>=4.40,<5",
 ]
-dev = ["pytest>=8,<9"]
+gollie = [
+  "black>=24.8,<25",
+  "torch>=2.2",
+  "transformers>=4.40,<5",
+]
+dev = ["black>=24.8,<25", "pytest>=8,<9"]
 
 [project.scripts]
 re-te-system = "re_te_system.cli:main"

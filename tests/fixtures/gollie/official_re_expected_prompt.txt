@@ -1,0 +1,26 @@
+# The following lines describe the task definition
+@dataclass
+class PhysicalRelation(Relation):
+    """The Physical Relation captures the physical location relation of entities such as:
+    a Person entity located in a Facility, Location or GPE; or two entities that are near,
+    but neither entity is a part of the other or located in/at the other."""
+
+    arg1: str
+    arg2: str
+
+
+@dataclass
+class PersonalSocialRelation(Relation):
+    """The Personal-Social Relation describe the relationship between people. Both arguments must be entities
+    of type Person. Please note: The arguments of these Relations are not ordered. The Relations are
+    symmetric."""
+
+    arg1: str
+    arg2: str
+
+
+# This is the text to analyze
+text = "Ana and Mary are sisters. Mary was at the supermarket while Ana was at home."
+
+# The annotation instances that take place in the text above are listed here
+result =

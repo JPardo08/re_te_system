@@ -1,0 +1,29 @@
+{
+  "schema_id": "official-re-ana-mary",
+  "schema_version": "gollie-schema-v1",
+  "prompt_serializer_version": "gollie-prompt-v1",
+  "classes": [
+    {
+      "name": "PhysicalRelation",
+      "kind": "relation",
+      "base": "Relation",
+      "definition": "The Physical Relation captures the physical location relation of entities such as:\n    a Person entity located in a Facility, Location or GPE; or two entities that are near,\n    but neither entity is a part of the other or located in/at the other.",
+      "examples": [],
+      "arguments": [
+        {"name": "arg1", "type_name": "str", "guideline": null, "examples": [], "required": true},
+        {"name": "arg2", "type_name": "str", "guideline": null, "examples": [], "required": true}
+      ]
+    },
+    {
+      "name": "PersonalSocialRelation",
+      "kind": "relation",
+      "base": "Relation",
+      "definition": "The Personal-Social Relation describe the relationship between people. Both arguments must be entities\n    of type Person. Please note: The arguments of these Relations are not ordered. The Relations are\n    symmetric.",
+      "examples": [],
+      "arguments": [
+        {"name": "arg1", "type_name": "str", "guideline": null, "examples": [], "required": true},
+        {"name": "arg2", "type_name": "str", "guideline": null, "examples": [], "required": true}
+      ]
+    }
+  ]
+}

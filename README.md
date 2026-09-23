@@ -9,8 +9,10 @@ manifest` without importing benchmark or evaluator Python packages.
 mREBEL and REBEL are external historical TE baselines with pretrained,
 Wikidata-style native relation schemas. Pythia/SPACE-KBP is a separate
 `KBP_DOMAIN_BASELINE` tied to its fixed space-mission ontology. UIE is a
-`UNIVERSAL_IE` baseline receiving a dynamic runtime structural schema. None is
-a controlled C0/C1/C2/C3 condition, and none maps native output to Hohfeld.
+`UNIVERSAL_IE` baseline receiving a dynamic runtime structural schema. GoLLIE
+is a separate `GUIDELINE_FOLLOWING_UIE_BASELINE` receiving structural schema
+plus definitions/guidelines; it is not Controlled C2. None is a controlled
+C0/C1/C2/C3 condition, and none maps native output to Hohfeld.
 
 mREBEL is multilingual and receives the required `es_XX`/`tp_XX` runtime
 formatting. REBEL is English-centric/monolingual; Spanish text is passed
@@ -24,7 +26,8 @@ a C0→C3 conditioning effect. Pythia manifests add
 `controlled_experiment_condition: not_applicable`; the legacy-compatible
 `condition: C0` field must not be interpreted causally. UIE uses the same
 explicit `not_applicable` marker and does not establish arbitrary-schema
-zero-shot reliability.
+zero-shot reliability. GoLLIE uses the same `not_applicable` marker and is
+not part of same-model causal contrast.
 
 ## Development environment
 
@@ -47,17 +50,20 @@ cache:
 export HF_HOME="$PWD/.cache/huggingface"
 ```
 
-Core and REBEL/mREBEL/UIE mock execution have no runtime dependencies. Pythia
-Turtle parsing requires its optional RDFLib dependency. For development without
-ML dependencies, use `python -m pip install -e ".[dev]"`. The semantically
-distinct `mrebel`, `rebel`, `pythia`, and `uie` extras can be combined with
-`dev` independently:
+Core and REBEL/mREBEL/UIE mock execution have no runtime dependencies. GoLLIE
+mock prompt serialization requires the pinned Black dependency included in
+`dev` and `gollie`. Pythia Turtle parsing requires its optional RDFLib
+dependency. For development without ML dependencies, use
+`python -m pip install -e ".[dev]"`. The semantically distinct `mrebel`,
+`rebel`, `pythia`, `uie`, and `gollie` extras can be combined with `dev`
+independently:
 
 ```bash
 python -m pip install -e ".[dev,mrebel]"
 python -m pip install -e ".[dev,rebel]"
 python -m pip install -e ".[dev,pythia]"
 python -m pip install -e ".[dev,uie]"
+python -m pip install -e ".[dev,gollie]"
 ```
 
 Use `--extractor rebel-mock` for the dependency-free REBEL contract fixture, or
@@ -74,6 +80,12 @@ Use `--extractor uie-mock --uie-schema-file SCHEMA.json` for the weight-free
 UIE structural contract. The pinned real adapter is local-only by default.
 The schema interface accepts custom labels, but reliable unseen-schema
 zero-shot extraction is not established. See `docs/UIE_BASELINE.md`.
+
+Use `--extractor gollie-mock --gollie-schema-file SCHEMA.json` for the
+weight-free GoLLIE contract. Prompt serialization requires the pinned Black
+dependency. The real adapter is local-only, requires an NVIDIA CUDA GPU and
+FlashAttention, and has no CPU/MPS fallback in P0. See
+`docs/GOLLIE_BASELINE.md`.
 
 ## Mock document run
 

@@ -107,8 +107,39 @@ constraint status, and conservative parser policy. It also records
 `interface_accepts_custom_schema: true` separately from
 `zero_shot_unseen_schema_supported: unknown`.
 
+### Dynamic guideline-schema GoLLIE
+
+GoLLIE uses:
+
+```json
+{
+  "run_role": "baseline",
+  "model_family": "gollie",
+  "task_class": "UNIVERSAL_IE",
+  "target_schema_knowledge": "structural_schema+definitions_guidelines",
+  "controlled_experiment_condition": "not_applicable",
+  "input_language": "es",
+  "language_status": "out_of_documented_training_scope",
+  "native_schema": {
+    "inherited_from_model": false,
+    "scope": "dynamic_runtime_guideline_schema",
+    "dynamic_runtime_schema": true,
+    "definitions_guidelines": true,
+    "formal_ontology": false
+  }
+}
+```
+
+GoLLIE model metadata records the pinned merged full-model checkpoint,
+Code Llama base, Llama 2 weight terms, custom-modeling requirement,
+FlashAttention/CUDA requirement, prompt serializer version, schema hash,
+guideline hash, exact serialized prompt, Black policy/version, quantization
+`none`, and `scientific_role: GUIDELINE_FOLLOWING_UIE_BASELINE`. English
+native-schema runs use `language_status: supported`. GoLLIE is not Controlled
+C2.
+
 The backward-compatible `condition: C0`, `conditioning: none`, and
-`target_condition.id: C0` fields remain in the shared contract. For Pythia and
-UIE, they do **not** imply membership in the causal C0-C3 experiment.
-`controlled_experiment_condition: not_applicable` and each `task_class` are
-the authoritative classification fields.
+`target_condition.id: C0` fields remain in the shared contract. For Pythia,
+UIE, and GoLLIE, they do **not** imply membership in the causal C0-C3
+experiment. `controlled_experiment_condition: not_applicable` and each
+`task_class` are the authoritative classification fields.

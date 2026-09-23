@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from re_te_system.conditioning.gollie_schema import GoLLIESchema
 from re_te_system.contracts import ExtractionContext, RawExtractionResult
+from re_te_system.extractors.gollie import (
+    GOLLIE_DOCUMENTED_LANGUAGE,
+    GOLLIE_MERGED_FULL_MODEL,
+    GOLLIE_SCIENTIFIC_ROLE,
+    GOLLIE_WEIGHT_LICENSE,
+)
 
 
 @dataclass
@@ -104,6 +111,65 @@ class MockPythiaExtractor:
                 "prompt_profile_version": "basic-v1",
                 "quantization": "none",
                 "truncated_input": False,
+            },
+        )
+
+
+@dataclass
+class MockGoLLIEExtractor:
+    """GoLLIE-shaped fixture preserving exact constructor-list RAW without weights."""
+
+    model_name: str = "mock/gollie-contract"
+    model_revision: str = "mock-gollie-v1"
+    schema: GoLLIESchema | None = None
+    outputs: dict[str, str] = field(default_factory=dict)
+    fail_on: set[str] = field(default_factory=set)
+
+    def extract(self, text: str, context: ExtractionContext) -> RawExtractionResult:
+        if context.input_id in self.fail_on:
+            raise RuntimeError("configured mock GoLLIE failure")
+        output = self.outputs.get(
+            context.input_id,
+            '[\n    PersonalSocialRelation(arg1="Ana", arg2="Mary")\n]',
+        )
+        prompt = self.schema.serialize_prompt(text) if self.schema is not None else ""
+        return RawExtractionResult(
+            model_output=output,
+            generation_metadata={
+                "base_model": "codellama/CodeLlama-7b-hf",
+                "constraint_decoding": False,
+                "custom_modeling": True,
+                "deterministic": True,
+                "documented_language": GOLLIE_DOCUMENTED_LANGUAGE,
+                "effective_input_limit": 16384,
+                "exact_prompt": prompt,
+                "flash_attention": True,
+                "flash_attention_required": True,
+                "guideline_hash": (
+                    self.schema.guideline_hash()
+                    if self.schema is not None
+                    else "mock-gollie-guideline-hash"
+                ),
+                "input_token_count": len(text.split()),
+                "max_new_tokens": 128,
+                "merged_full_model": GOLLIE_MERGED_FULL_MODEL,
+                "model_max_length": 16384,
+                "number_of_sequences": 1,
+                "output_reached_limit": False,
+                "output_token_count": len(output.split()),
+                "prompt_serializer_version": "gollie-prompt-v1",
+                "quantization": "none",
+                "schema_hash": (
+                    self.schema.schema_hash()
+                    if self.schema is not None
+                    else "mock-gollie-schema-hash"
+                ),
+                "schema_id": (
+                    self.schema.schema_id if self.schema is not None else "mock-gollie-schema"
+                ),
+                "scientific_role": GOLLIE_SCIENTIFIC_ROLE,
+                "truncated_input": False,
+                "weight_license": GOLLIE_WEIGHT_LICENSE,
             },
         )
 

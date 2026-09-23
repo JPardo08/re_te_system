@@ -2,12 +2,13 @@
 
 ## Scope
 
-The current system preserves the P0.5 contracts and contains four external
-baseline adapters: `mREBEL`, `REBEL`, Pythia/SPACE-KBP, and UIE. Deterministic
-fixtures cover all four output families. The P0.5 naming is retained rather
-than retroactively renaming a frozen release. The system contains no C1/C2/C3
-conditioning, translation, Hohfeld rescue logic, controlled generator,
-training, API, UI, semantic validator, or evaluation matching.
+The current system preserves the P0.5 contracts and contains five external
+baseline adapters: `mREBEL`, `REBEL`, Pythia/SPACE-KBP, UIE, and GoLLIE.
+Deterministic fixtures cover all five output families. The P0.5 naming is
+retained rather than retroactively renaming a frozen release. The system
+contains no C1/C2/C3 conditioning, translation, Hohfeld rescue logic,
+controlled generator, training, API, UI, semantic validator, or evaluation
+matching.
 
 The runtime/package contains no training implementation. Repository-level
 tooling under `scripts/reproductions/` may validate data and orchestrate
@@ -27,8 +28,14 @@ Hohfeld ontology input, and is not a C0/C1/C2/C3 condition.
 UIE is a `UNIVERSAL_IE` baseline receiving an inference-time structural
 schema. Its interface accepts custom labels, but reliable arbitrary unseen
 schema extraction is scientifically unestablished. UIE is English, not
-Hohfeld-native, and not a controlled condition. Comparisons among external
-baselines are outside the future controlled C0–C3 causal experiment.
+Hohfeld-native, and not a controlled condition.
+
+GoLLIE is a `UNIVERSAL_IE` baseline reported as
+`GUIDELINE_FOLLOWING_UIE_BASELINE`. It receives a dynamic runtime schema with
+both `STRUCTURAL_SCHEMA` and `DEFINITIONS_GUIDELINES`. GoLLIE is not
+Controlled C2, not Hohfeld-native, and not a controlled condition.
+Comparisons among external baselines are outside the future controlled C0–C3
+causal experiment.
 
 The scientific input unit is a document/article. The loader projects each
 benchmark JSONL row to exactly `example_id`, `document_id`, and `text`; nested
@@ -40,11 +47,13 @@ segments and all triples aggregate back into one document prediction.
 1. RAW stores every exact decoded segment output and available generation
    metadata.
 2. PARSED dispatches to the matching format-specific parser: mREBEL
-   control tokens, REBEL control tokens, conservative RDF Turtle, or
-   conservative UIE SEL. Parsers preserve deterministic occurrence order and
-   duplicates and report malformed output. Turtle and SEL parsing never repair
-   RAW. UIE also retains typed Spot-Association structures before binary
-   relation projection.
+   control tokens, REBEL control tokens, conservative RDF Turtle,
+   conservative UIE SEL, or safe AST GoLLIE constructor lists. Parsers
+   preserve deterministic occurrence order and duplicates and report
+   malformed output. Turtle, SEL, and GoLLIE parsing never repair RAW. UIE
+   also retains typed Spot-Association structures before binary relation
+   projection. GoLLIE retains typed class records before binary relation
+   projection and never executes model output.
 3. NORMALIZED applies Unicode NFC, canonical whitespace, and canonical nulls
    only. RDF literal lexical values are preserved because internal whitespace
    may be semantically significant.
@@ -54,14 +63,17 @@ segments and all triples aggregate back into one document prediction.
 REBEL/mREBEL entity offsets are case-insensitive post-hoc string alignments.
 UIE structure offsets use a separate exact, case-sensitive stage that records
 `exact`, `ambiguous`, or `not_found` and never forces an ambiguous first match.
+GoLLIE textual arguments use the same exact/ambiguous/not_found policy and do
+not port first-case-insensitive-match as hidden truth.
 Null/ambiguous alignment never removes a prediction.
 
 ## Windowing
 
 `NONE`, `CHARACTER`, and tokenizer-aware `TOKEN` strategies are explicit.
-Maximum units, overlap, and mechanism are manifest fields. All four real
+Maximum units, overlap, and mechanism are manifest fields. All five real
 adapters default to `TOKEN` with their configured effective input limit; mocks
-default to `NONE`. Pythia derives its limit from model configuration minus the
+default to `NONE`. The real GoLLIE adapter additionally requires CUDA and
+FlashAttention at initialization; P0 has no CPU/MPS fallback. Pythia derives its limit from model configuration minus the
 generation budget and records truncation explicitly. The legacy 1,200-character
 mREBEL trigger and legacy Pythia 1,024-token cutoff are not defaults.
 

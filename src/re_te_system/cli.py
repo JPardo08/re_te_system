@@ -7,9 +7,19 @@ from functools import partial
 import json
 from pathlib import Path
 
+from re_te_system.conditioning.gollie_schema import GoLLIESchema
 from re_te_system.conditioning.uie_schema import UIESchema
+from re_te_system.extractors.gollie import (
+    GOLLIE_DOCUMENTED_LANGUAGE,
+    GOLLIE_MERGED_FULL_MODEL,
+    GOLLIE_SCIENTIFIC_ROLE,
+    GOLLIE_WEIGHT_LICENSE,
+    GoLLIEConfig,
+    GoLLIEExtractor,
+)
 from re_te_system.extractors.mock import (
     MockExtractor,
+    MockGoLLIEExtractor,
     MockPythiaExtractor,
     MockRebelExtractor,
     MockUIEExtractor,
@@ -18,6 +28,11 @@ from re_te_system.extractors.mrebel import MRebelConfig, MRebelExtractor
 from re_te_system.extractors.pythia import PythiaConfig, PythiaSpaceKBPExtractor
 from re_te_system.extractors.rebel import RebelConfig, RebelExtractor
 from re_te_system.extractors.uie import UIEConfig, UIEExtractor
+from re_te_system.parsing.gollie import (
+    align_gollie_records,
+    parse_gollie,
+    project_gollie_relations,
+)
 from re_te_system.parsing.mrebel import parse_mrebel
 from re_te_system.parsing.rebel import parse_rebel
 from re_te_system.parsing.sel import (
@@ -59,10 +74,12 @@ def build_parser() -> argparse.ArgumentParser:
             "rebel-mock",
             "pythia-mock",
             "uie-mock",
+            "gollie-mock",
             "mrebel",
             "rebel",
             "pythia",
             "uie",
+            "gollie",
         ),
         default="mock",
     )
@@ -79,6 +96,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--uie-max-target-tokens", type=int, default=192)
     run.add_argument("--uie-num-beams", type=int, default=1)
     run.add_argument("--uie-schema-file")
+    run.add_argument("--gollie-schema-file")
+    run.add_argument("--gollie-max-new-tokens", type=int, default=128)
     run.add_argument("--max-new-tokens", type=int, default=512)
     run.add_argument("--max-length", type=int, default=512)
     run.add_argument("--num-beams", type=int, default=3)
@@ -113,6 +132,8 @@ def main(argv: list[str] | None = None) -> int:
     controlled_experiment_condition = None
     structure_aligner = None
     structure_projector = None
+    record_aligner = None
+    record_projector = None
     target_schema_knowledge = "none"
     native_schema = {"id": "wikidata_like", "inherited_from_model": True}
     if args.extractor == "mock":
@@ -226,6 +247,56 @@ def main(argv: list[str] | None = None) -> int:
             "schema_hash": schema.stable_hash(),
             "schema_version": schema.schema_version,
         }
+    elif args.extractor == "gollie-mock":
+        if not args.gollie_schema_file:
+            raise SystemExit("--gollie-schema-file is required for GoLLIE extractors")
+        schema = GoLLIESchema.read_json(args.gollie_schema_file)
+        extractor = MockGoLLIEExtractor(schema=schema)
+        parse_output = partial(parse_gollie, schema=schema)
+        record_aligner = align_gollie_records
+        record_projector = project_gollie_relations
+        generation = GoLLIEConfig().generation_config()
+        strategy = args.window_strategy or "NONE"
+        model_metadata = {
+            "base_model": "codellama/CodeLlama-7b-hf",
+            "constraint_decoding": False,
+            "custom_modeling": True,
+            "definitions_guidelines": True,
+            "device": "none",
+            "documented_language": GOLLIE_DOCUMENTED_LANGUAGE,
+            "dtype": "none",
+            "dynamic_runtime_schema": True,
+            "flash_attention_required": True,
+            "formal_ontology": False,
+            "interface_accepts_custom_schema": True,
+            "merged_full_model": GOLLIE_MERGED_FULL_MODEL,
+            "parser_policy": "safe_ast_gollie_v1",
+            "quantization": "none",
+            "schema": schema.manifest_metadata(),
+            "scientific_role": GOLLIE_SCIENTIFIC_ROLE,
+            "tokenizer": "mock",
+            "weight_license": GOLLIE_WEIGHT_LICENSE,
+            "zero_shot_unseen_schema_supported": "documented_with_limitations",
+        }
+        model_family = "gollie"
+        language_status = (
+            "supported"
+            if args.input_language == "en"
+            else "out_of_documented_training_scope"
+        )
+        task_class = "UNIVERSAL_IE"
+        controlled_experiment_condition = "not_applicable"
+        target_schema_knowledge = "structural_schema+definitions_guidelines"
+        native_schema = {
+            "definitions_guidelines": True,
+            "dynamic_runtime_schema": True,
+            "formal_ontology": False,
+            "id": schema.schema_id,
+            "inherited_from_model": False,
+            "schema_hash": schema.schema_hash(),
+            "schema_version": schema.schema_version,
+            "scope": "dynamic_runtime_guideline_schema",
+        }
     elif args.extractor == "mrebel":
         config = MRebelConfig(
             model_name=args.model_name or "Babelscape/mrebel-large",
@@ -317,7 +388,7 @@ def main(argv: list[str] | None = None) -> int:
             "inherited_from_model": True,
             "scope": "fixed_domain_ontology",
         }
-    else:
+    elif args.extractor == "uie":
         if not args.uie_schema_file:
             raise SystemExit("--uie-schema-file is required for UIE extractors")
         schema = UIESchema.read_json(args.uie_schema_file)
@@ -371,6 +442,67 @@ def main(argv: list[str] | None = None) -> int:
             "schema_hash": schema.stable_hash(),
             "schema_version": schema.schema_version,
         }
+    else:
+        if not args.gollie_schema_file:
+            raise SystemExit("--gollie-schema-file is required for GoLLIE extractors")
+        schema = GoLLIESchema.read_json(args.gollie_schema_file)
+        config = GoLLIEConfig(
+            model_name=args.model_name or GoLLIEConfig().model_name,
+            revision=args.model_revision or GoLLIEConfig().revision,
+            device=args.device if args.device in {"auto", "cuda"} else "auto",
+            dtype=args.dtype if args.dtype != "float32" else "bfloat16",
+            max_new_tokens=args.gollie_max_new_tokens,
+            seed=args.seed,
+            local_files_only=True,
+        )
+        extractor = GoLLIEExtractor(schema=schema, config=config)
+        parse_output = partial(parse_gollie, schema=schema)
+        record_aligner = align_gollie_records
+        record_projector = project_gollie_relations
+        generation = config.generation_config()
+        strategy = args.window_strategy or "TOKEN"
+        model_metadata = {
+            "base_model": "codellama/CodeLlama-7b-hf",
+            "constraint_decoding": False,
+            "custom_modeling": True,
+            "definitions_guidelines": True,
+            "device": str(extractor.device),
+            "documented_language": GOLLIE_DOCUMENTED_LANGUAGE,
+            "dtype": config.dtype,
+            "dynamic_runtime_schema": True,
+            "effective_input_limit": extractor.effective_input_limit,
+            "flash_attention_required": True,
+            "formal_ontology": False,
+            "interface_accepts_custom_schema": True,
+            "merged_full_model": GOLLIE_MERGED_FULL_MODEL,
+            "model_max_length": extractor.model_max_length,
+            "parser_policy": "safe_ast_gollie_v1",
+            "quantization": config.quantization,
+            "schema": schema.manifest_metadata(),
+            "scientific_role": GOLLIE_SCIENTIFIC_ROLE,
+            "tokenizer": extractor.tokenizer_name,
+            "weight_license": GOLLIE_WEIGHT_LICENSE,
+            "zero_shot_unseen_schema_supported": "documented_with_limitations",
+        }
+        model_family = "gollie"
+        language_status = (
+            "supported"
+            if args.input_language == "en"
+            else "out_of_documented_training_scope"
+        )
+        task_class = "UNIVERSAL_IE"
+        controlled_experiment_condition = "not_applicable"
+        target_schema_knowledge = "structural_schema+definitions_guidelines"
+        native_schema = {
+            "definitions_guidelines": True,
+            "dynamic_runtime_schema": True,
+            "formal_ontology": False,
+            "id": schema.schema_id,
+            "inherited_from_model": False,
+            "schema_hash": schema.schema_hash(),
+            "schema_version": schema.schema_version,
+            "scope": "dynamic_runtime_guideline_schema",
+        }
     maximum = args.window_max_units
     if strategy == "TOKEN" and maximum is None:
         maximum = getattr(extractor, "effective_input_limit", args.max_input_tokens)
@@ -395,6 +527,8 @@ def main(argv: list[str] | None = None) -> int:
         parse_output=parse_output,
         structure_aligner=structure_aligner,
         structure_projector=structure_projector,
+        record_aligner=record_aligner,
+        record_projector=record_projector,
         run_role="baseline",
         model_family=model_family,
         target_schema_knowledge=target_schema_knowledge,

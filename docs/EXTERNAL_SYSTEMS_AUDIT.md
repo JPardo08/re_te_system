@@ -625,3 +625,25 @@ snapshot or its original decisions:
   serving as a task-fine-tuned RE checkpoint.
 
 See `PYTHIA_BASELINE.md` and `UIE_BASELINE.md` for current technical policy.
+
+## Current integration status (2026-09-23)
+
+This section appends implementation status. It does not revise the audit
+rankings, candidate shortlist, or historical conclusions above.
+
+- GoLLIE clean-room adapter, typed guideline schema, Black prompt serializer,
+  safe AST parser, exact alignment, and binary relation projection:
+  implemented.
+- Pinned checkpoint/revision: `HiTZ/GoLLIE-7B` @
+  `d3e41fef45f6a7d438c46ba7d9fce5d0d486c7a9`.
+- Scientific role: `GUIDELINE_FOLLOWING_UIE_BASELINE`;
+  `task_class: UNIVERSAL_IE`;
+  `controlled_experiment_condition: not_applicable`.
+- Target knowledge: `STRUCTURAL_SCHEMA` + `DEFINITIONS_GUIDELINES`.
+- GoLLIE is not Controlled C2 and is not part of same-model causal contrast.
+- Weight-free native RE fixture, hallucinated-class fixture, and unsafe AST
+  fixture: implemented. No real weights were downloaded.
+- Real native smoke: `REAL_GOLLIE_NATIVE_SMOKE = BLOCKED_GPU`. The future
+  command is prepared but not executed.
+
+See `GOLLIE_BASELINE.md` for the current technical policy.

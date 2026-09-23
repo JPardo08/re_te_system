@@ -13,10 +13,12 @@ from re_te_system.contracts import (
     InputRecord,
     ParseIssue,
     ParseResult,
+    ParsedGoLLIERecord,
     ParsedSpot,
     ParsedTriple,
     PREDICTION_CONTRACT_VERSION,
     Segment,
+    gollie_record_to_dict,
     spot_to_dict,
     triple_to_dict,
 )
@@ -34,6 +36,11 @@ StructureAligner = Callable[
     tuple[tuple[ParsedSpot, ...], tuple[ParseIssue, ...]],
 ]
 StructureProjector = Callable[[tuple[ParsedSpot, ...]], tuple[ParsedTriple, ...]]
+RecordAligner = Callable[
+    [tuple[ParsedGoLLIERecord, ...], str, int],
+    tuple[tuple[ParsedGoLLIERecord, ...], tuple[ParseIssue, ...]],
+]
+RecordProjector = Callable[[tuple[ParsedGoLLIERecord, ...]], tuple[ParsedTriple, ...]]
 
 
 @dataclass(frozen=True)
@@ -158,6 +165,8 @@ def run_pipeline(
     parse_output: Parser = parse_mrebel,
     structure_aligner: StructureAligner | None = None,
     structure_projector: StructureProjector | None = None,
+    record_aligner: RecordAligner | None = None,
+    record_projector: RecordProjector | None = None,
     run_role: str = "baseline",
     model_family: str = "mrebel",
     target_schema_knowledge: str = "none",
@@ -219,6 +228,8 @@ def run_pipeline(
         parsed_all = []
         parsed_structures_all: list[ParsedSpot] = []
         aligned_structures_all: list[ParsedSpot] = []
+        parsed_gollie_all: list[ParsedGoLLIERecord] = []
+        aligned_gollie_all: list[ParsedGoLLIERecord] = []
         parse_issues = []
         example_failed = False
         try:
@@ -260,6 +271,7 @@ def run_pipeline(
                 parsed = parse_output(raw.model_output, segment.segment_id)
                 parse_issues.extend(parsed.issues)
                 parsed_structures_all.extend(parsed.structures)
+                parsed_gollie_all.extend(parsed.gollie_records)
                 aligned_structures = parsed.structures
                 if structure_aligner is not None:
                     aligned_structures, alignment_issues = structure_aligner(
@@ -269,6 +281,15 @@ def run_pipeline(
                     )
                     parse_issues.extend(alignment_issues)
                 aligned_structures_all.extend(aligned_structures)
+                aligned_records = parsed.gollie_records
+                if record_aligner is not None:
+                    aligned_records, record_issues = record_aligner(
+                        parsed.gollie_records,
+                        segment.text,
+                        segment.start,
+                    )
+                    parse_issues.extend(record_issues)
+                aligned_gollie_all.extend(aligned_records)
                 aligned_triples = align_triples(
                     parsed.triples,
                     segment.text,
@@ -277,6 +298,8 @@ def run_pipeline(
                 parsed_all.extend(aligned_triples)
                 if structure_projector is not None:
                     parsed_all.extend(structure_projector(aligned_structures))
+                if record_projector is not None:
+                    parsed_all.extend(record_projector(aligned_records))
                 if raw.generation_metadata.get("output_reached_limit") is True:
                     parse_issues.append(
                         ParseIssue(
@@ -307,7 +330,7 @@ def run_pipeline(
         parsed_tuple = tuple(parsed_all)
         normalized = normalize_triples(parsed_tuple)
         validated = validate_structural(normalized, tuple(parse_issues))
-        stats["parsed_structures"] += len(parsed_structures_all)
+        stats["parsed_structures"] += len(parsed_structures_all) + len(parsed_gollie_all)
         stats["parsed_triples"] += len(parsed_tuple)
         stats["parse_failures"] += sum(
             issue.code
@@ -319,6 +342,8 @@ def run_pipeline(
                 "MALFORMED_SEL",
                 "TRUNCATED_SEL",
                 "UNPARSEABLE_CHUNK",
+                "INVALID_GOLLIE_SYNTAX",
+                "UNSAFE_AST_NODE",
             }
             for issue in parse_issues
         )
@@ -366,6 +391,21 @@ def run_pipeline(
             prediction["aligned_structures"] = [
                 spot_to_dict(spot) for spot in aligned_structures_all
             ]
+        if record_aligner is not None or record_projector is not None:
+            prediction["parsed_gollie_records"] = [
+                gollie_record_to_dict(record) for record in parsed_gollie_all
+            ]
+            prediction["aligned_gollie_records"] = [
+                gollie_record_to_dict(record) for record in aligned_gollie_all
+            ]
+            stats["structure_alignment_failures"] += sum(
+                record.alignment_status in {"ambiguous", "not_found"}
+                or any(
+                    argument.alignment_status in {"ambiguous", "not_found"}
+                    for argument in record.arguments
+                )
+                for record in aligned_gollie_all
+            )
         if legacy_relation_filter:
             prediction["derived"] = {
                 "legacy_filtered": [

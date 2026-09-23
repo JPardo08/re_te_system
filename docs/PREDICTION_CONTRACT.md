@@ -39,6 +39,14 @@ missing/ambiguous offsets never remove a structure. Entity/event-only and null
 rejection structures remain in these fields and do not fabricate canonical
 triples.
 
+GoLLIE adds `parsed_gollie_records` and `aligned_gollie_records`. Each record
+keeps class name, kind, schema-known status, ordered/keyword arguments, raw
+argument values, and alignment status. Unknown classes remain visible.
+Entities, events, templates, malformed calls, and unknown signatures stay in
+these fields and do not fabricate canonical triples. Alignment is exact and
+case-sensitive (`exact`, `ambiguous`, or `not_found`) and never forces a
+first match.
+
 Violations have `code`, `severity` (`soft` or `hard`), message, and optional
 triple index. Status is `ok`, `soft_fail`, or `hard_fail`.
 

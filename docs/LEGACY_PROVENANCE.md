@@ -162,3 +162,25 @@ documented in `_legacy/UIE/LEGACY_REPRODUCTION.md`.
 UIE is an external `UNIVERSAL_IE` baseline with structural-schema knowledge.
 It is not a controlled C0-C3 condition, and interface acceptance of custom
 labels is not evidence of reliable unseen-schema zero-shot extraction.
+
+## GoLLIE clean-room integration (2026-09-23)
+
+The clean-room GoLLIE adapter does not import `_legacy/GoLLIE` runtime code.
+Official RE class wording used by the weight-free fixture is taken from the
+audited official notebook example. Historical audit conclusions in this file
+and in `EXTERNAL_SYSTEMS_AUDIT.md` are not rewritten.
+
+- Official Python-class prompt shape — **ADAPT_CONCEPT**. P0 serializes
+  explicit schema objects with Black (`line_length=119`) instead of
+  `inspect.getsource`.
+- Official `eval()` output interpretation — **NOT MIGRATED**. P0 uses
+  parse-only `ast` and never executes model output.
+- First-case-insensitive mention alignment — **NOT MIGRATED**. P0 uses a
+  separate exact/ambiguous/not_found stage.
+- Upstream mention-count or scorer deduplication — **NOT MIGRATED**.
+- CPU/MPS/Ollama/GGUF/vLLM or alternative attention backends —
+  **NOT MIGRATED**. Real loading remains CUDA plus FlashAttention.
+
+GoLLIE is an external `UNIVERSAL_IE` baseline reported as
+`GUIDELINE_FOLLOWING_UIE_BASELINE`. It is not Controlled C2 and is not a
+controlled C0-C3 condition. See `GOLLIE_BASELINE.md`.

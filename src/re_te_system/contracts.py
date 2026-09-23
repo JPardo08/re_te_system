@@ -79,10 +79,30 @@ class ParseIssue:
 
 
 @dataclass(frozen=True)
+class ParsedGoLLIEArgument:
+    name: str | None
+    value: Any
+    alignment_status: str = "not_attempted"
+    span_start: int | None = None
+    span_end: int | None = None
+
+
+@dataclass(frozen=True)
+class ParsedGoLLIERecord:
+    kind: str
+    class_name: str
+    arguments: tuple[ParsedGoLLIEArgument, ...]
+    schema_known: bool
+    segment_id: str | None = None
+    alignment_status: str = "not_attempted"
+
+
+@dataclass(frozen=True)
 class ParseResult:
     triples: tuple[ParsedTriple, ...]
     issues: tuple[ParseIssue, ...] = ()
     structures: tuple[ParsedSpot, ...] = ()
+    gollie_records: tuple[ParsedGoLLIERecord, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -160,4 +180,24 @@ def spot_to_dict(spot: ParsedSpot) -> dict[str, Any]:
         "span": spot.span,
         "span_end": spot.span_end,
         "span_start": spot.span_start,
+    }
+
+
+def gollie_record_to_dict(record: ParsedGoLLIERecord) -> dict[str, Any]:
+    return {
+        "alignment_status": record.alignment_status,
+        "arguments": [
+            {
+                "alignment_status": argument.alignment_status,
+                "name": argument.name,
+                "span_end": argument.span_end,
+                "span_start": argument.span_start,
+                "value": argument.value,
+            }
+            for argument in record.arguments
+        ],
+        "class_name": record.class_name,
+        "kind": record.kind,
+        "schema_known": record.schema_known,
+        "segment_id": record.segment_id,
     }
