@@ -39,6 +39,7 @@ from re_te_system.extractors.gollie import (
     GoLLIEConfig,
     GoLLIEExtractor,
     _require_cuda_flash_attention,
+    causal_effective_input_limit,
 )
 from re_te_system.extractors.mock import MockGoLLIEExtractor
 from re_te_system.parsing.gollie import (
@@ -602,6 +603,62 @@ def test_documentation_does_not_claim_c2_or_hohfeld() -> None:
     assert "No Hohfeld guideline definitions" in text
 
 
+def test_causal_context_budget_is_model_max_minus_generation() -> None:
+    assert causal_effective_input_limit(16, 4) == 12
+    assert causal_effective_input_limit(16384, 128) == 16256
+    with pytest.raises(ValueError, match="max_new_tokens"):
+        causal_effective_input_limit(8, 8)
+    with pytest.raises(ValueError, match="max_new_tokens"):
+        causal_effective_input_limit(8, 9)
+
+
+def test_prompt_is_truncated_to_leave_generation_budget() -> None:
+    import torch
+
+    model_max_length = 16
+    max_new_tokens = 4
+    untruncated_tokens = 20
+
+    class FakeTokenizer:
+        eos_token_id = 2
+
+        def __call__(self, text: str, *, add_special_tokens: bool = True):
+            return {"input_ids": list(range(untruncated_tokens)) + [self.eos_token_id]}
+
+        def decode(self, ids, **kwargs) -> str:
+            return OFFICIAL_RAW
+
+    class FakeModel:
+        def generate(self, **kwargs):
+            prompt_len = kwargs["input_ids"].shape[-1]
+            continuation = list(range(kwargs["max_new_tokens"]))
+            return SimpleNamespace(
+                sequences=torch.tensor([[0] * prompt_len + continuation])
+            )
+
+    adapter = GoLLIEExtractor.__new__(GoLLIEExtractor)
+    adapter.schema = SCHEMA
+    adapter.config = GoLLIEConfig(max_new_tokens=max_new_tokens)
+    adapter.tokenizer = FakeTokenizer()
+    adapter.model = FakeModel()
+    adapter.device = torch.device("cpu")
+    adapter.model_max_length = model_max_length
+    adapter.effective_input_limit = causal_effective_input_limit(
+        model_max_length,
+        max_new_tokens,
+    )
+    result = adapter.extract(OFFICIAL_RE_ANA_MARY_TEXT, ExtractionContext("x", "x", None))
+    metadata = result.generation_metadata
+    assert adapter.effective_input_limit == model_max_length - max_new_tokens
+    assert metadata["model_max_length"] == model_max_length
+    assert metadata["max_new_tokens"] == max_new_tokens
+    assert metadata["effective_input_limit"] == 12
+    assert metadata["untruncated_input_token_count"] == untruncated_tokens
+    assert metadata["truncated_input"] is True
+    assert metadata["input_token_count"] == 12
+    assert metadata["input_token_count"] + metadata["max_new_tokens"] <= metadata["model_max_length"]
+
+
 def test_real_extractor_metadata_and_truncation_without_loading_weights() -> None:
     import torch
 
@@ -634,7 +691,11 @@ def test_real_extractor_metadata_and_truncation_without_loading_weights() -> Non
     assert result.model_output == OFFICIAL_RAW
     assert result.generation_metadata["exact_prompt"] == EXPECTED_PROMPT.rstrip("\n")
     assert result.generation_metadata["truncated_input"] is True
+    assert result.generation_metadata["untruncated_input_token_count"] == 10
     assert result.generation_metadata["input_token_count"] == 4
+    assert result.generation_metadata["model_max_length"] == 16384
+    assert result.generation_metadata["max_new_tokens"] == 2
+    assert result.generation_metadata["effective_input_limit"] == 4
     assert result.generation_metadata["output_token_count"] == 3
     assert result.generation_metadata["schema_hash"] == SCHEMA.schema_hash()
     assert result.generation_metadata["guideline_hash"] == SCHEMA.guideline_hash()

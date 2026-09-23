@@ -39,7 +39,7 @@ Python 3.11 or newer.
 conda create -n re_te_system_312 python=3.12 -y
 conda activate re_te_system_312
 python -m pip install --upgrade pip
-python -m pip install -e ".[dev,mrebel]"
+python -m pip install -e ".[dev,mrebel,rebel,pythia,uie,gollie]"
 pytest
 ```
 
@@ -83,9 +83,10 @@ zero-shot extraction is not established. See `docs/UIE_BASELINE.md`.
 
 Use `--extractor gollie-mock --gollie-schema-file SCHEMA.json` for the
 weight-free GoLLIE contract. Prompt serialization requires the pinned Black
-dependency. The real adapter is local-only, requires an NVIDIA CUDA GPU and
-FlashAttention, and has no CPU/MPS fallback in P0. See
-`docs/GOLLIE_BASELINE.md`.
+dependency included in `dev` and `gollie`. FlashAttention is not a core or
+`dev` dependency. Real GoLLIE inference still requires a separate NVIDIA CUDA
+GPU environment with official FlashAttention and has no CPU/MPS fallback in
+P0. See `docs/GOLLIE_BASELINE.md`.
 
 ## Mock document run
 

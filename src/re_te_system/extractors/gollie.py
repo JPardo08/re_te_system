@@ -72,6 +72,19 @@ class GoLLIEConfig:
         return asdict(self)
 
 
+def causal_effective_input_limit(model_max_length: int, max_new_tokens: int) -> int:
+    """Reserve generation tokens inside the decoder-only context window."""
+    if max_new_tokens >= model_max_length:
+        raise ValueError(
+            "max_new_tokens must be smaller than model_max_length so the "
+            "decoder-only context budget leaves room for the prompt"
+        )
+    limit = model_max_length - max_new_tokens
+    if limit <= 0:
+        raise ValueError("effective_input_limit must be positive")
+    return limit
+
+
 def _require_cuda_flash_attention() -> None:
     try:
         import torch
@@ -138,7 +151,10 @@ class GoLLIEExtractor:
         )
         tokenizer_limit = int(getattr(self.tokenizer, "model_max_length", 16384))
         self.model_max_length = tokenizer_limit if tokenizer_limit < 1_000_000 else 16384
-        self.effective_input_limit = self.model_max_length
+        self.effective_input_limit = causal_effective_input_limit(
+            self.model_max_length,
+            config.max_new_tokens,
+        )
 
     def _prompt(self, text: str) -> str:
         return self.schema.serialize_prompt(text)
