@@ -22,6 +22,8 @@ from re_te_system.extractors.uie import (
     CANONICAL_UIE_REVISION,
     UIEConfig,
     UIEExtractor,
+    local_uie_provenance,
+    resolve_uie_weight_revision,
 )
 from re_te_system.parsing.sel import (
     align_spot_structures,
@@ -485,3 +487,49 @@ def test_uie_artifacts_are_deterministic(tmp_path: Path) -> None:
     assert first.name == second.name
     for filename in ("manifest.json", "predictions.jsonl", "failures.jsonl", "statistics.json"):
         assert (first / filename).read_bytes() == (second / filename).read_bytes()
+
+
+def test_local_finetuned_checkpoint_is_not_labeled_with_the_base_revision(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "finetuned"
+    checkpoint.mkdir()
+    (checkpoint / "config.json").write_text(
+        json.dumps({"_commit_hash": CANONICAL_UIE_REVISION, "model_type": "t5"}),
+        encoding="utf-8",
+    )
+    (checkpoint / "pytorch_model.bin").write_bytes(b"finetuned-weights")
+    training = tmp_path / "training_manifest.json"
+    training.write_text(
+        json.dumps(
+            {
+                "best_metric": 0.5,
+                "best_model_checkpoint": str(checkpoint),
+                "best_model_metric": "eval_overall-F1",
+                "output_dir": str(tmp_path / "train"),
+                "slurm": {"job_id": "123"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    try:
+        UIEConfig(model_name=str(checkpoint), revision=CANONICAL_UIE_REVISION)
+    except ValueError as exc:
+        assert "cannot carry a Git revision" in str(exc)
+    else:
+        raise AssertionError("local checkpoint accepted the base Git revision")
+    config = UIEConfig(
+        model_name=str(checkpoint),
+        revision=None,
+        training_manifest=str(training),
+    )
+    provenance = local_uie_provenance(config)
+    resolved = resolve_uie_weight_revision(config, CANONICAL_UIE_REVISION)
+    assert resolved.startswith("local-weights:")
+    assert resolved != CANONICAL_UIE_REVISION
+    assert CANONICAL_UIE_REVISION not in resolved
+    assert provenance["base_model_id"] == CANONICAL_UIE_MODEL_ID
+    assert provenance["base_revision"] == CANONICAL_UIE_REVISION
+    assert provenance["weights_identity"] == resolved
+    assert provenance["weight_files"]["pytorch_model.bin"]["sha256"]
+    assert provenance["training_run"]["output_dir"] == str(tmp_path / "train")
+    assert provenance["training_run"]["manifest_sha256"]
+    assert provenance["training_run"]["slurm"]["job_id"] == "123"

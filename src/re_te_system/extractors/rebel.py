@@ -5,7 +5,12 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from re_te_system.contracts import ExtractionContext, RawExtractionResult
+from re_te_system.contracts import (
+    CROSS_LINGUAL_DIAGNOSTIC,
+    NATIVE_REPRODUCTION,
+    ExtractionContext,
+    RawExtractionResult,
+)
 
 
 @dataclass(frozen=True)
@@ -44,6 +49,23 @@ class RebelConfig:
 
     def manifest_config(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def rebel_run_scope(input_language: str) -> dict[str, str]:
+    """English is native. Any other input is a diagnostic, not a ranking run."""
+    if input_language == "en":
+        return {
+            "input_language": "en",
+            "language_status": "supported",
+            "principal_ranking": "included",
+            "scientific_stratum": NATIVE_REPRODUCTION,
+        }
+    return {
+        "input_language": input_language,
+        "language_status": "out_of_documented_language_scope",
+        "principal_ranking": "excluded",
+        "scientific_stratum": CROSS_LINGUAL_DIAGNOSTIC,
+    }
 
 
 class RebelExtractor:

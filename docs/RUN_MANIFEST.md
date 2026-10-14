@@ -52,10 +52,23 @@ REBEL and mREBEL use:
 ```
 
 mREBEL records Spanish as supported and its `es_XX`/`tp_XX` model formatting.
-REBEL records `input_language: es`,
-`language_status: out_of_primary_model_scope`, and no language tokens. This
-status is deliberately conservative rather than an invented quantitative
-language-support claim.
+Its CLI runs also record `scientific_stratum: SPANISH_HOHFELD_MAIN`.
+
+REBEL English input records `language_status: supported` and
+`scientific_stratum: NATIVE_REPRODUCTION`. Any other input language, including
+Spanish Hohfeld, records `language_status: out_of_documented_language_scope`,
+`scientific_stratum: CROSS_LINGUAL_DIAGNOSTIC`, and
+`principal_ranking: excluded`. That diagnostic is not a principal comparison.
+The historical pipeline fixtures that pass `out_of_primary_model_scope`
+explicitly keep that caller-supplied status.
+
+A local fine-tuned UIE directory is not given a Git revision. `resolved_revision`
+is `local-weights:` plus a SHA-256 over `config.json` and the weight files.
+`checkpoint_provenance.base_model_id` and `base_revision` keep
+`luyaojie/uie-base-en` at `966f8b1fc4c74e94ab552081605913ad5133cc41` as the
+base checkpoint, together with weight hashes and the training-run identity.
+The base SHA is not the revision of the fine-tuned weights. A hub load of
+`uie-base-en` still resolves that Git SHA.
 
 ### Fixed-domain ontology KBP
 

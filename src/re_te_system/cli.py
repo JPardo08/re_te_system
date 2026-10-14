@@ -19,6 +19,11 @@ from re_te_system.conditioning.genie_constraints import (
 )
 from re_te_system.conditioning.gollie_schema import GoLLIESchema
 from re_te_system.conditioning.uie_schema import UIESchema
+from re_te_system.contracts import (
+    CROSS_LINGUAL_DIAGNOSTIC,
+    NATIVE_REPRODUCTION,
+    SPANISH_HOHFELD_MAIN,
+)
 from re_te_system.extractors.genie import (
     CANONICAL_ARCHITECTURE,
     CANONICAL_CHECKPOINT_MD5,
@@ -54,7 +59,7 @@ from re_te_system.extractors.mock import (
 )
 from re_te_system.extractors.mrebel import MRebelConfig, MRebelExtractor
 from re_te_system.extractors.pythia import PythiaConfig, PythiaSpaceKBPExtractor
-from re_te_system.extractors.rebel import RebelConfig, RebelExtractor
+from re_te_system.extractors.rebel import RebelConfig, RebelExtractor, rebel_run_scope
 from re_te_system.extractors.uie import UIEConfig, UIEExtractor
 from re_te_system.parsing.genie import parse_genie
 from re_te_system.parsing.gollie import (
@@ -196,6 +201,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--uie-max-target-tokens", type=int, default=192)
     run.add_argument("--uie-num-beams", type=int, default=1)
     run.add_argument("--uie-schema-file")
+    run.add_argument("--uie-training-manifest")
     run.add_argument("--gollie-schema-file")
     run.add_argument("--gollie-max-new-tokens", type=int, default=128)
     run.add_argument(
@@ -465,6 +471,8 @@ def main(argv: list[str] | None = None) -> int:
             "device": str(extractor.device),
             "dtype": config.dtype,
             "language": {"source": config.src_lang, "target_token": config.target_token},
+            "principal_ranking": "included",
+            "scientific_stratum": SPANISH_HOHFELD_MAIN,
             "tokenizer": config.tokenizer_name or config.model_name,
         }
         model_family = "mrebel"
@@ -485,14 +493,17 @@ def main(argv: list[str] | None = None) -> int:
         parse_output = parse_rebel
         generation = config.generation_config()
         strategy = args.window_strategy or "TOKEN"
+        scope = rebel_run_scope(args.input_language)
         model_metadata = {
             "device": str(extractor.device),
             "dtype": config.dtype,
-            "language": {"input": "es", "language_tokens": "none"},
+            "language": {"input": scope["input_language"], "language_tokens": "none"},
+            "principal_ranking": scope["principal_ranking"],
+            "scientific_stratum": scope["scientific_stratum"],
             "tokenizer": config.tokenizer_name or config.model_name,
         }
         model_family = "rebel"
-        language_status = "out_of_primary_model_scope"
+        language_status = scope["language_status"]
     elif args.extractor == "pythia":
         prefixes = _prefixes(args.turtle_prefix)
         config = PythiaConfig(
@@ -538,9 +549,19 @@ def main(argv: list[str] | None = None) -> int:
         if not args.uie_schema_file:
             raise SystemExit("--uie-schema-file is required for UIE extractors")
         schema = UIESchema.read_json(args.uie_schema_file)
+        model_name = args.model_name or UIEConfig().model_name
+        local_checkpoint = Path(model_name).expanduser().is_dir()
+        if local_checkpoint and args.model_revision:
+            raise SystemExit(
+                "refusing --model-revision for a local UIE checkpoint; "
+                "base_revision stays on the provenance record and the loaded "
+                "weights get a content identity, not the uie-base-en Git SHA"
+            )
+        if local_checkpoint and not args.uie_training_manifest:
+            raise SystemExit("--uie-training-manifest is required for a local UIE checkpoint")
         config = UIEConfig(
-            model_name=args.model_name or UIEConfig().model_name,
-            revision=args.model_revision or UIEConfig().revision,
+            model_name=model_name,
+            revision=None if local_checkpoint else (args.model_revision or UIEConfig().revision),
             device=args.device,
             dtype=args.dtype,
             max_source_tokens=args.uie_max_source_tokens,
@@ -548,6 +569,7 @@ def main(argv: list[str] | None = None) -> int:
             num_beams=args.uie_num_beams,
             seed=args.seed,
             local_files_only=True,
+            training_manifest=args.uie_training_manifest,
         )
         extractor = UIEExtractor(schema=schema, config=config)
         parse_output = partial(
@@ -571,7 +593,15 @@ def main(argv: list[str] | None = None) -> int:
             "schema": schema.manifest_metadata(),
             "tokenizer": extractor.tokenizer_name,
             "zero_shot_unseen_schema_supported": "unknown",
+            "principal_ranking": "included" if args.input_language == "en" else "excluded",
+            "scientific_stratum": (
+                NATIVE_REPRODUCTION
+                if args.input_language == "en"
+                else CROSS_LINGUAL_DIAGNOSTIC
+            ),
         }
+        if extractor.checkpoint_provenance is not None:
+            model_metadata["checkpoint_provenance"] = extractor.checkpoint_provenance
         model_family = "uie"
         language_status = (
             "supported"
@@ -629,6 +659,10 @@ def main(argv: list[str] | None = None) -> int:
             "tokenizer": extractor.tokenizer_name,
             "weight_license": GOLLIE_WEIGHT_LICENSE,
             "zero_shot_unseen_schema_supported": "documented_with_limitations",
+            "principal_ranking": "included" if args.input_language == "en" else "excluded",
+            "scientific_stratum": (
+                NATIVE_REPRODUCTION if args.input_language == "en" else CROSS_LINGUAL_DIAGNOSTIC
+            ),
         }
         model_family = "gollie"
         language_status = (

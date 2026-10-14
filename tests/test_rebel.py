@@ -6,7 +6,7 @@ from pathlib import Path
 from re_te_system.contracts import InputRecord
 from re_te_system.extractors.base import Extractor
 from re_te_system.extractors.mock import MockRebelExtractor
-from re_te_system.extractors.rebel import RebelConfig, RebelExtractor
+from re_te_system.extractors.rebel import RebelConfig, RebelExtractor, rebel_run_scope
 from re_te_system.parsing.rebel import parse_rebel
 from re_te_system.runner.run import (
     WindowingConfig,
@@ -74,6 +74,17 @@ def test_rebel_config_is_deterministic_and_historically_explicit() -> None:
         "temperature": None,
     }
     assert RebelConfig().model_name == "Babelscape/rebel-large"
+
+
+def test_rebel_english_is_native_and_spanish_is_diagnostic() -> None:
+    english = rebel_run_scope("en")
+    spanish = rebel_run_scope("es")
+    assert english["scientific_stratum"] == "NATIVE_REPRODUCTION"
+    assert english["language_status"] == "supported"
+    assert english["principal_ranking"] == "included"
+    assert spanish["scientific_stratum"] == "CROSS_LINGUAL_DIAGNOSTIC"
+    assert spanish["language_status"] == "out_of_documented_language_scope"
+    assert spanish["principal_ranking"] == "excluded"
 
 
 def test_rebel_parser_one_and_multiple_triples() -> None:
