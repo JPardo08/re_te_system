@@ -1,0 +1,76 @@
+{
+  "catalog_version": "exp3c1-1",
+  "verified_on": "2026-10-19",
+  "vram_is_not_process_ram": true,
+  "scratch_backup": "not_guaranteed",
+  "sources": [
+    "https://docs.cesvima.upm.es/magerit/magerit3/",
+    "https://docs.cesvima.upm.es/magerit/jobs/",
+    "https://docs.cesvima.upm.es/magerit/apps/",
+    "https://docs.cesvima.upm.es/magerit/faq/",
+    "docs/CESVIMA_TRAIN_FIRST.md"
+  ],
+  "notes": [
+    "Public pages name GPU models and node RAM. They do not state GPU VRAM. vram is null.",
+    "process_ram on a task is the SLURM memory request recorded in the local job table, not VRAM.",
+    "SCRATCH and .cache are temporary. A publishable artifact must be copied out of SCRATCH.",
+    "The A100 profile records the public inventory. The local job guard disables it. This file does not change that guard."
+  ],
+  "profiles": [
+    {
+      "id": "cpu-acquire",
+      "gpu_type": null,
+      "gpu_count": 0,
+      "process_ram": null,
+      "node_ram_published": null,
+      "vram": null,
+      "partition": "standard",
+      "enabled": true,
+      "role": "acquisition_hashing_and_environment_checks"
+    },
+    {
+      "id": "v100-infer",
+      "gpu_type": "v100",
+      "gpu_count": 1,
+      "process_ram": null,
+      "node_ram_published": "192 GiB",
+      "vram": null,
+      "partition": "standard-gpu",
+      "enabled": true,
+      "role": "existing_v100_jobs_only"
+    },
+    {
+      "id": "l40s-infer",
+      "gpu_type": "l40s",
+      "gpu_count": 1,
+      "process_ram": null,
+      "node_ram_published": "768 GiB",
+      "vram": null,
+      "partition": "standard-gpu",
+      "enabled": true,
+      "role": "existing_l40s_jobs_only"
+    },
+    {
+      "id": "a100-infer",
+      "gpu_type": "a100",
+      "gpu_count": 1,
+      "process_ram": null,
+      "node_ram_published": "192 GiB",
+      "vram": null,
+      "partition": "standard-gpu",
+      "enabled": false,
+      "role": "publicly_documented_and_disabled_by_current_job_policy"
+    },
+    {
+      "id": "unassigned",
+      "gpu_type": null,
+      "gpu_count": 0,
+      "process_ram": null,
+      "node_ram_published": null,
+      "vram": null,
+      "partition": null,
+      "enabled": true,
+      "role": "no_cesvima_profile_selected"
+    }
+  ]
+}

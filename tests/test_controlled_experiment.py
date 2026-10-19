@@ -42,6 +42,7 @@ from re_te_system.controlled_experiment.contracts import (
 )
 from re_te_system.controlled_experiment.dependencies import (
     SYSTEM_REPO,
+    git_revision,
     repository_root_from_package,
 )
 from re_te_system.controlled_experiment.fingerprint import (
@@ -502,14 +503,26 @@ def test_same_script_across_conditions_and_stable_identity(tmp_path: Path) -> No
     operational = first["manifest"]["operational"]
     assert "repositories" not in identity
     assert "implementation_fingerprint" not in identity
-    assert operational["repositories"]["re_te_system"]["commit_identifies_tree"] is False
-    assert operational["repositories"]["re_te_system"]["dirty"] is True
-    assert operational["repositories"]["re_te_system"]["head"] == "4996f32d809084a7c6b7e19f5e2649b523b24641"
-    assert operational["repositories"]["re_te_benchmark"]["head"] == "005cb78a117216e0f2d4ab221c6e1bc7e8baf16f"
-    assert operational["repositories"]["re_te_benchmark"]["commit_identifies_tree"] is True
-    assert operational["repositories"]["re_te_evaluation"]["head"] == "11bc1b99499061e7b5bbfdab1a6103c62a393c58"
-    assert operational["repositories"]["re_te_evaluation"]["commit_identifies_tree"] is True
-    assert operational["freeze_status"] == "incomplete"
+    assert "repository_heads" in first["manifest"]["identity_excludes"]
+    observed_revisions = {
+        "re_te_system": git_revision(SYSTEM_REPO),
+        "re_te_benchmark": git_revision(repository_root_from_package("re_te_benchmark")),
+        "re_te_evaluation": git_revision(repository_root_from_package("re_te_evaluation")),
+    }
+    for name, record in observed_revisions.items():
+        stored = operational["repositories"][name]
+        assert stored["head"] == record["head"]
+        assert stored["dirty"] == record["dirty"]
+        assert stored["commit_identifies_tree"] == record["commit_identifies_tree"]
+        gap = f"{name}:commit_does_not_identify_a_clean_tree"
+        identifies_clean_tree = record["head"] != "UNRESOLVED" and record["dirty"] is False
+        assert (gap in operational["freeze_gaps"]) is (not identifies_clean_tree)
+    assert operational["freeze_status"] == (
+        "incomplete" if operational["freeze_gaps"] else "content_addressed"
+    )
+    assert operational["repositories"] == second["manifest"]["operational"]["repositories"]
+    assert operational["freeze_status"] == second["manifest"]["operational"]["freeze_status"]
+    assert operational["freeze_gaps"] == second["manifest"]["operational"]["freeze_gaps"]
     assert operational["created_at"] is None
     assert identity["shell"]["sha256"] == sha256_text(shell_template())
     assert first["implementation_fingerprint"] == second["implementation_fingerprint"]

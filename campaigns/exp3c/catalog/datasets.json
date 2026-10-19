@@ -1,0 +1,200 @@
+{
+  "catalog_version": "exp3c1-1",
+  "datasets": [
+    {
+      "id": "teresia_hohfeld",
+      "version": "0.1.0",
+      "origin": "estatuto_goldstandard@8e22ead8359515164979e85e9fe1f3741f838826",
+      "language": "es",
+      "relation_schema_id": "hohfeld_duty_right_privilege_noright",
+      "evaluation_only": true,
+      "independent_cohort": true,
+      "synthetic": false,
+      "license": null,
+      "license_note": "License text was not re-audited in exp3c1. Gold remains evaluation-only.",
+      "content_sha256": null,
+      "permitted_uses": ["evaluation", "inference_input"],
+      "prohibited_uses": ["training", "generation_fixture", "automatic_split"],
+      "reconstruction_dependencies": [],
+      "eligibility": {
+        "policy": "strict_inline",
+        "annotations": 95,
+        "eligible_annotations": 60,
+        "materialized_occurrences": 61,
+        "documents": 36,
+        "f1_denominator_fixed": false,
+        "documents_without_strict_gold": [
+          "articulo_6",
+          "articulo_9",
+          "articulo_17",
+          "articulo_28",
+          "articulo_34",
+          "articulo_50",
+          "articulo_65"
+        ]
+      },
+      "splits": [
+        {
+          "id": "canonical_documents",
+          "role": "inference_input",
+          "records": 36,
+          "sha256": "a9978064c7323ba89d2e9f73bc5963ffeea6dbae5b051dfa1043ae855c11b259",
+          "path": "re_te_benchmark/datasets/teresia_hohfeld/canonical/documents.jsonl"
+        },
+        {
+          "id": "canonical_annotations",
+          "role": "evaluation_gold",
+          "records": 95,
+          "sha256": "add825203ea06a5dcb3a30320e1b35fa3643270703a0395e92815ab2ea49ee2d",
+          "path": "re_te_benchmark/datasets/teresia_hohfeld/canonical/annotations.jsonl"
+        },
+        {
+          "id": "smoke3",
+          "role": "smoke",
+          "records": 3,
+          "sha256": null,
+          "members": ["articulo_61", "articulo_8", "articulo_12"],
+          "note": "Predeclared subset of the 36 documents. Not a new Gold split."
+        }
+      ]
+    },
+    {
+      "id": "teresia_hohfeld_sentence_aligned",
+      "version": "0.1.0",
+      "origin": "teresia_hohfeld projection",
+      "language": "es",
+      "relation_schema_id": "hohfeld_duty_right_privilege_noright",
+      "evaluation_only": true,
+      "independent_cohort": false,
+      "synthetic": false,
+      "license": null,
+      "content_sha256": "d090da1b493868cc6d6d2760efa14bd563785530dd822500d46dffe789b7a40c",
+      "records": 65,
+      "permitted_uses": ["historical_projection"],
+      "prohibited_uses": ["training", "primary_cohort"],
+      "reconstruction_dependencies": ["teresia_hohfeld"],
+      "splits": [{"id": "projection", "role": "historical_projection", "records": 65}]
+    },
+    {
+      "id": "teresia_hohfeld_span_complete",
+      "version": "0.1.0",
+      "origin": "teresia_hohfeld projection",
+      "language": "es",
+      "relation_schema_id": "hohfeld_duty_right_privilege_noright",
+      "evaluation_only": true,
+      "independent_cohort": false,
+      "synthetic": false,
+      "license": null,
+      "content_sha256": "8a2c2ea19d2f7e8d6a954c03badb0235d0cdcc338160e947c862d871e3519941",
+      "records": 41,
+      "permitted_uses": ["historical_projection"],
+      "prohibited_uses": ["training", "primary_cohort"],
+      "reconstruction_dependencies": ["teresia_hohfeld"],
+      "splits": [{"id": "projection", "role": "historical_projection", "records": 41}]
+    },
+    {
+      "id": "teresia_mrebel_human_validated",
+      "version": "0.1.0",
+      "origin": "teresia-mrebel@f75ad75567c9f10d7efa99cc58e0a20ae82de3ad",
+      "language": "es",
+      "relation_schema_id": "wikidata_like_not_hohfeld",
+      "evaluation_only": false,
+      "independent_cohort": false,
+      "synthetic": false,
+      "license": null,
+      "content_sha256": "38b18f7e0286354833dd4a69b620de8a1827947c963cc03d34646c40eb0b6ffc",
+      "permitted_uses": ["auxiliary_human_judgment_analysis"],
+      "prohibited_uses": [
+        "training",
+        "independent_gold",
+        "mrebel_recall",
+        "hohfeld_conditioning"
+      ],
+      "reconstruction_dependencies": [],
+      "generator": "mREBEL",
+      "counts": {"judged": 2189, "accepted": 465, "rejected": 1724},
+      "splits": [
+        {"id": "canonical", "role": "auxiliary", "records": 2189},
+        {"id": "accepted", "role": "auxiliary", "records": 465},
+        {"id": "rejected", "role": "auxiliary", "records": 1724},
+        {"id": "disputed", "role": "auxiliary", "records": 469}
+      ]
+    },
+    {
+      "id": "conll04_uie",
+      "version": "uie-seed1-10shot",
+      "origin": "Roth and Yih via Gupta 2016, SpERT, Sincere, UIE",
+      "language": "en",
+      "relation_schema_id": "conll04_relations",
+      "evaluation_only": false,
+      "independent_cohort": true,
+      "synthetic": false,
+      "license": null,
+      "license_note": "public_redistribution UNRESOLVED. Private reconstruction is the versioned path. Publishing the conversion is not authorized.",
+      "content_sha256": null,
+      "permitted_uses": ["training", "validation", "test", "smoke"],
+      "prohibited_uses": ["hohfeld_training", "public_redistribution"],
+      "reconstruction_dependencies": [
+        "universal-ie/UIE@c88dd08b8ad0016ec597ebc6f8fff49480367bb2",
+        "btaille/sincere@dd1c34916ddcdc5ceb2799d64b17e80cdf1a5b31"
+      ],
+      "source_sha256": "3abe11eb5750e2c37e99a428f5e6c7e3b15f77d66053bca85e21e0772d601119",
+      "converted_full_sha256": {
+        "train": "d59e10133d2272e6daf4837ffe7236aa1f4f708af44142f4c48536e211ffdcc6",
+        "validation": "a9be8c5c3716456fb3caffa13f069feea6272a07a4fadce47265db07b30debb8",
+        "test": "91d6b666268bacf73ea9352f7111c2ef84a212374148bb357933555707811feb"
+      },
+      "splits": [
+        {"id": "seed1_10shot", "role": "train_validation_test", "sha256": null}
+      ]
+    },
+    {
+      "id": "gollie_official_re_fixture",
+      "version": "gollie-schema-v1",
+      "origin": "re_te_system/tests/fixtures/gollie",
+      "language": "en",
+      "relation_schema_id": "official_re_ana_mary",
+      "evaluation_only": false,
+      "independent_cohort": false,
+      "synthetic": false,
+      "license": null,
+      "content_sha256": "c1444f94d3a509343985d9598b541f154b8717462f89fa0a54052ed44b72eb95",
+      "permitted_uses": ["smoke"],
+      "prohibited_uses": ["training", "hohfeld_evaluation", "scientific_leaderboard"],
+      "reconstruction_dependencies": [],
+      "splits": [{"id": "official_re", "role": "smoke", "records": 1}]
+    },
+    {
+      "id": "space_kbp",
+      "version": null,
+      "origin": "SPACE-KBP, cited by the Pythia checkpoint card",
+      "language": "en",
+      "relation_schema_id": "space_ontology",
+      "evaluation_only": false,
+      "independent_cohort": false,
+      "synthetic": false,
+      "license": "CC BY-NC 4.0",
+      "content_sha256": null,
+      "permitted_uses": [],
+      "prohibited_uses": ["execution_until_weight_license", "training"],
+      "reconstruction_dependencies": [],
+      "splits": [{"id": "not_versioned_here", "role": "unavailable", "sha256": null}]
+    },
+    {
+      "id": "controlled_experiment_synthetic",
+      "version": "exp3b1-1",
+      "origin": "re_te_system.controlled_experiment synthetic harness",
+      "language": null,
+      "relation_schema_id": null,
+      "evaluation_only": false,
+      "independent_cohort": false,
+      "synthetic": true,
+      "license": null,
+      "content_sha256": null,
+      "permitted_uses": ["contract_test"],
+      "prohibited_uses": ["training", "scientific_leaderboard", "gold_substitute"],
+      "reconstruction_dependencies": [],
+      "splits": [{"id": "contract_fixture", "role": "contract_test"}]
+    }
+  ]
+}

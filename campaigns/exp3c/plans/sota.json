@@ -1,0 +1,1284 @@
+{
+  "catalog_version": "exp3c1-1",
+  "program": "SOTA",
+  "authority": "scripts/cesvima/submit_train_first.sh",
+  "submit_all_is_not_authorization": true,
+  "notes": [
+    "submit --all is not an authorization to run every task.",
+    "J13 is the only training task and uses CoNLL04, not Hohfeld Gold.",
+    "A result that exists only on SCRATCH is not publishable."
+  ],
+  "tasks": [
+    {
+      "program": "SOTA",
+      "system_id": null,
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "Verify the existing inference environment pin. Do not create another environment.",
+      "inputs": [
+        "SCRATCH venv re_te_system_gpu_312"
+      ],
+      "outputs": [
+        "environment diagnostic in the job log"
+      ],
+      "dependencies": [],
+      "resource_profile_id": "cpu-acquire",
+      "resources": {
+        "process_ram": "8G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/j00_verify_infer_env.sbatch",
+        "invoked_by": "scripts/cesvima/submit_train_first.sh"
+      },
+      "gates": [
+        "Python 3.12.3",
+        "torch 2.5.1+cu121",
+        "transformers 4.57.6"
+      ],
+      "acceptance_criteria": [
+        "exit 0 and re_te_system imports from the pinned environment"
+      ],
+      "preparation_status": "AWAITING_AUTHORIZATION",
+      "authorization": "not_authorized",
+      "technical_block": false,
+      "block_reasons": [],
+      "training": false,
+      "included_in_submit_all": true,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": false,
+      "requires_tokenizer": false,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "J00"
+    },
+    {
+      "program": "SOTA",
+      "system_id": "mrebel",
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "Cache the pinned mREBEL snapshot.",
+      "inputs": [
+        "Babelscape/mrebel-large@50e0587ac7ac87d28b9abd069d72333528a5aa09"
+      ],
+      "outputs": [
+        "runs/p3/mrebel/snapshot.json"
+      ],
+      "dependencies": [
+        "J00"
+      ],
+      "resource_profile_id": "cpu-acquire",
+      "resources": {
+        "process_ram": "8G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/j01_mrebel_cache_verify.sbatch",
+        "invoked_by": "scripts/cesvima/submit_train_first.sh"
+      },
+      "gates": [
+        "versioned job contract"
+      ],
+      "acceptance_criteria": [
+        "snapshot records the pinned 40-character revision"
+      ],
+      "preparation_status": "AWAITING_AUTHORIZATION",
+      "authorization": "not_authorized",
+      "technical_block": false,
+      "block_reasons": [],
+      "training": false,
+      "included_in_submit_all": true,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "J01"
+    },
+    {
+      "program": "SOTA",
+      "system_id": "mrebel",
+      "dataset_id": "teresia_hohfeld",
+      "split": "smoke3",
+      "condition": null,
+      "protocol_id": null,
+      "summary": "Local-only mREBEL smoke on three predeclared articles.",
+      "inputs": [
+        "articulo_61",
+        "articulo_8",
+        "articulo_12"
+      ],
+      "outputs": [
+        "runs/p3/mrebel/smoke3/"
+      ],
+      "dependencies": [
+        "J01"
+      ],
+      "resource_profile_id": "v100-infer",
+      "resources": {
+        "process_ram": "32G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/j02_mrebel_smoke3.sbatch",
+        "invoked_by": "scripts/cesvima/submit_train_first.sh"
+      },
+      "gates": [
+        "resolved revision is the pinned SHA",
+        "relation_filter is none",
+        "inputs_succeeded is 3"
+      ],
+      "acceptance_criteria": [
+        "four artifacts exist and inputs_failed is 0",
+        "F1 is not a PASS criterion"
+      ],
+      "preparation_status": "AWAITING_AUTHORIZATION",
+      "authorization": "not_authorized",
+      "technical_block": false,
+      "block_reasons": [],
+      "training": false,
+      "included_in_submit_all": true,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "J02"
+    },
+    {
+      "program": "SOTA",
+      "system_id": "mrebel",
+      "dataset_id": "teresia_hohfeld",
+      "split": "canonical_documents",
+      "condition": null,
+      "protocol_id": "SOTA_SPANISH_HOHFELD",
+      "summary": "Full mREBEL inference on the 36 Hohfeld documents. Annotations are not model input.",
+      "inputs": [
+        "canonical documents.jsonl"
+      ],
+      "outputs": [
+        "runs/p3/mrebel/full/"
+      ],
+      "dependencies": [
+        "J02"
+      ],
+      "resource_profile_id": "v100-infer",
+      "resources": {
+        "process_ram": "32G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/j03_mrebel_full.sbatch",
+        "invoked_by": "scripts/cesvima/submit_train_first.sh"
+      },
+      "gates": [
+        "es_XX and tp_XX",
+        "no legacy relation filter",
+        "inputs_succeeded is 36"
+      ],
+      "acceptance_criteria": [
+        "four artifacts exist and inputs_failed is 0"
+      ],
+      "preparation_status": "AWAITING_AUTHORIZATION",
+      "authorization": "not_authorized",
+      "technical_block": false,
+      "block_reasons": [],
+      "training": false,
+      "included_in_submit_all": true,
+      "evaluation": {
+        "protocol_id": "SOTA_SPANISH_HOHFELD",
+        "publish": false,
+        "estimand": "exact_complete_triplet_f1"
+      },
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": "scientific_comparable",
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "J03"
+    },
+    {
+      "program": "SOTA",
+      "system_id": "rebel",
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "Resolve Babelscape/rebel-large to a 40-character SHA. Do not invent the SHA.",
+      "inputs": [
+        "Hugging Face model info"
+      ],
+      "outputs": [
+        "runs/p3/rebel/revision.json"
+      ],
+      "dependencies": [
+        "J00"
+      ],
+      "resource_profile_id": "cpu-acquire",
+      "resources": {
+        "process_ram": "4G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/j04_rebel_resolve_revision.sbatch",
+        "invoked_by": "scripts/cesvima/submit_train_first.sh"
+      },
+      "gates": [
+        "versioned job contract"
+      ],
+      "acceptance_criteria": [
+        "revision.json contains a lowercase 40-character SHA from the Hub API"
+      ],
+      "preparation_status": "AWAITING_AUTHORIZATION",
+      "authorization": "not_authorized",
+      "technical_block": false,
+      "block_reasons": [],
+      "training": false,
+      "included_in_submit_all": true,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": false,
+      "requires_tokenizer": false,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "J04"
+    },
+    {
+      "program": "SOTA",
+      "system_id": "rebel",
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "Download only the SHA resolved by J04.",
+      "inputs": [
+        "runs/p3/rebel/revision.json"
+      ],
+      "outputs": [
+        "runs/p3/rebel/snapshot.json"
+      ],
+      "dependencies": [
+        "J04"
+      ],
+      "resource_profile_id": "cpu-acquire",
+      "resources": {
+        "process_ram": "8G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/j05_rebel_download.sbatch",
+        "invoked_by": "scripts/cesvima/submit_train_first.sh"
+      },
+      "gates": [
+        "versioned job contract"
+      ],
+      "acceptance_criteria": [
+        "a non-SHA revision is rejected"
+      ],
+      "preparation_status": "AWAITING_AUTHORIZATION",
+      "authorization": "not_authorized",
+      "technical_block": false,
+      "block_reasons": [],
+      "training": false,
+      "included_in_submit_all": true,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "J05"
+    },
+    {
+      "program": "SOTA",
+      "system_id": "rebel",
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "Native English REBEL smoke. Present and blocked: no versioned English fixture.",
+      "inputs": [],
+      "outputs": [
+        "runs/p3/rebel/native_smoke_status.json"
+      ],
+      "dependencies": [],
+      "resource_profile_id": "cpu-acquire",
+      "resources": {
+        "process_ram": "4G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/j06_rebel_native_smoke.sbatch",
+        "invoked_by": "scripts/cesvima/submit_train_first.sh"
+      },
+      "gates": [
+        "do not read documents.jsonl",
+        "do not invent English gold"
+      ],
+      "acceptance_criteria": [
+        "exit 2 with BLOCKED_FIXTURE"
+      ],
+      "preparation_status": "BLOCKED",
+      "authorization": "not_authorized",
+      "technical_block": true,
+      "block_reasons": [
+        {
+          "code": "BLOCKED_FIXTURE",
+          "evidence": "No versioned official English REBEL document. The job does not read Hohfeld."
+        }
+      ],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "J06"
+    },
+    {
+      "program": "SOTA",
+      "system_id": "rebel",
+      "dataset_id": "teresia_hohfeld",
+      "split": "canonical_documents",
+      "condition": null,
+      "protocol_id": "CROSS_LINGUAL_DIAGNOSTIC",
+      "summary": "Spanish Hohfeld diagnostic for an English model. Excluded from the principal comparison and from --all.",
+      "inputs": [
+        "canonical documents.jsonl, untranslated"
+      ],
+      "outputs": [
+        "runs/p3/rebel/hohfeld-cross-lingual/"
+      ],
+      "dependencies": [
+        "J05"
+      ],
+      "resource_profile_id": "v100-infer",
+      "resources": {
+        "process_ram": "32G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/j07_rebel_hohfeld_cross_lingual.sbatch",
+        "invoked_by": "scripts/cesvima/submit_train_first.sh"
+      },
+      "gates": [
+        "no es_XX or tp_XX tokens",
+        "principal_ranking excluded"
+      ],
+      "acceptance_criteria": [
+        "manifest is CROSS_LINGUAL_DIAGNOSTIC and out of documented language scope"
+      ],
+      "preparation_status": "AWAITING_AUTHORIZATION",
+      "authorization": "not_authorized",
+      "technical_block": false,
+      "block_reasons": [],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": {
+        "protocol_id": "CROSS_LINGUAL_DIAGNOSTIC",
+        "publish": false,
+        "estimand": "diagnostic_exact_complete_triplet_f1"
+      },
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": "diagnostic_only",
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "J07"
+    },
+    {
+      "program": "SOTA",
+      "system_id": "uie",
+      "dataset_id": "conll04_uie",
+      "split": "seed1_10shot",
+      "condition": null,
+      "protocol_id": null,
+      "summary": "Clone pinned UIE and Sincere revisions.",
+      "inputs": [
+        "universal-ie/UIE@c88dd08b8ad0016ec597ebc6f8fff49480367bb2",
+        "btaille/sincere@dd1c34916ddcdc5ceb2799d64b17e80cdf1a5b31"
+      ],
+      "outputs": [
+        "upstreams/UIE",
+        "upstreams/sincere"
+      ],
+      "dependencies": [],
+      "resource_profile_id": "cpu-acquire",
+      "resources": {
+        "process_ram": "8G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/j08_uie_fetch_upstreams.sbatch",
+        "invoked_by": "scripts/cesvima/submit_train_first.sh"
+      },
+      "gates": [
+        "versioned job contract"
+      ],
+      "acceptance_criteria": [
+        "both clones match the pinned revisions"
+      ],
+      "preparation_status": "AWAITING_AUTHORIZATION",
+      "authorization": "not_authorized",
+      "technical_block": false,
+      "block_reasons": [],
+      "training": false,
+      "included_in_submit_all": true,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": false,
+      "requires_tokenizer": false,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "J08"
+    },
+    {
+      "program": "SOTA",
+      "system_id": "uie",
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "Cache the pinned UIE base checkpoint.",
+      "inputs": [
+        "luyaojie/uie-base-en@966f8b1fc4c74e94ab552081605913ad5133cc41"
+      ],
+      "outputs": [
+        "runs/p3/uie/base_snapshot.json"
+      ],
+      "dependencies": [
+        "J00"
+      ],
+      "resource_profile_id": "cpu-acquire",
+      "resources": {
+        "process_ram": "8G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/j11_uie_cache_base.sbatch",
+        "invoked_by": "scripts/cesvima/submit_train_first.sh"
+      },
+      "gates": [
+        "versioned job contract"
+      ],
+      "acceptance_criteria": [
+        "snapshot records the pinned base revision"
+      ],
+      "preparation_status": "AWAITING_AUTHORIZATION",
+      "authorization": "not_authorized",
+      "technical_block": false,
+      "block_reasons": [],
+      "training": false,
+      "included_in_submit_all": true,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "J11"
+    },
+    {
+      "program": "SOTA",
+      "system_id": "uie",
+      "dataset_id": "conll04_uie",
+      "split": "seed1_10shot",
+      "condition": null,
+      "protocol_id": null,
+      "summary": "Rebuild CoNLL04 on scratch and compare hashes. Do not copy ignored legacy trees.",
+      "inputs": [
+        "pinned clones",
+        "versioned hash manifest"
+      ],
+      "outputs": [
+        "runs/p3/uie/rebuild_validation.json",
+        "shot_dir.txt"
+      ],
+      "dependencies": [
+        "J00",
+        "J08"
+      ],
+      "resource_profile_id": "cpu-acquire",
+      "resources": {
+        "process_ram": "16G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/j09_uie_rebuild_data.sbatch",
+        "invoked_by": "scripts/cesvima/submit_train_first.sh"
+      },
+      "gates": [
+        "hash mismatch is a closed failure",
+        "Hohfeld documents are not an input"
+      ],
+      "acceptance_criteria": [
+        "every recorded hash matches"
+      ],
+      "preparation_status": "AWAITING_AUTHORIZATION",
+      "authorization": "not_authorized",
+      "technical_block": false,
+      "block_reasons": [],
+      "training": false,
+      "included_in_submit_all": true,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": false,
+      "requires_tokenizer": false,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "J09"
+    },
+    {
+      "program": "SOTA",
+      "system_id": "uie",
+      "dataset_id": "conll04_uie",
+      "split": "seed1_10shot",
+      "condition": null,
+      "protocol_id": null,
+      "summary": "Freeze one test example whose text is absent from train, before any prediction.",
+      "inputs": [
+        "seed1/10shot train and test"
+      ],
+      "outputs": [
+        "runs/p3/uie/smoke_example.json"
+      ],
+      "dependencies": [
+        "J09"
+      ],
+      "resource_profile_id": "cpu-acquire",
+      "resources": {
+        "process_ram": "4G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/j10_uie_freeze_smoke_example.sbatch",
+        "invoked_by": "scripts/cesvima/submit_train_first.sh"
+      },
+      "gates": [
+        "versioned job contract"
+      ],
+      "acceptance_criteria": [
+        "identity and SHA of the example are stored and predictions are not read"
+      ],
+      "preparation_status": "AWAITING_AUTHORIZATION",
+      "authorization": "not_authorized",
+      "technical_block": false,
+      "block_reasons": [],
+      "training": false,
+      "included_in_submit_all": true,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": false,
+      "requires_tokenizer": false,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "J10"
+    },
+    {
+      "program": "SOTA",
+      "system_id": "uie",
+      "dataset_id": "conll04_uie",
+      "split": "seed1_10shot",
+      "condition": null,
+      "protocol_id": null,
+      "summary": "Preflight one real UIE training batch in the uie-train environment.",
+      "inputs": [
+        "base checkpoint",
+        "seed1/10shot",
+        "UIE clone"
+      ],
+      "outputs": [
+        "environment_fingerprint.json",
+        "preflight_report.json"
+      ],
+      "dependencies": [
+        "J09",
+        "J11"
+      ],
+      "resource_profile_id": "v100-infer",
+      "resources": {
+        "process_ram": "32G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/j12_uie_preflight.sbatch",
+        "invoked_by": "scripts/cesvima/submit_train_first.sh"
+      },
+      "gates": [
+        "any trainer API exception fails the job",
+        "the trainer is not patched"
+      ],
+      "acceptance_criteria": [
+        "fingerprint and preflight report exist with status PASS"
+      ],
+      "preparation_status": "AWAITING_AUTHORIZATION",
+      "authorization": "not_authorized",
+      "technical_block": false,
+      "block_reasons": [],
+      "training": false,
+      "included_in_submit_all": true,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "J12"
+    },
+    {
+      "program": "SOTA",
+      "system_id": "uie",
+      "dataset_id": "conll04_uie",
+      "split": "seed1_10shot",
+      "condition": null,
+      "protocol_id": "SOTA_NATIVE",
+      "summary": "The only training step in the versioned DAG: UIE base, CoNLL04, seed1, 10-shot.",
+      "inputs": [
+        "J12 PASS fingerprint",
+        "seed1/10shot train val test"
+      ],
+      "outputs": [
+        "runs/p3/uie/train/seed1-10shot/",
+        "training_manifest.json"
+      ],
+      "dependencies": [
+        "J12"
+      ],
+      "resource_profile_id": "v100-infer",
+      "resources": {
+        "process_ram": "32G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/j13_uie_train.sbatch",
+        "invoked_by": "scripts/cesvima/submit_train_first.sh"
+      },
+      "gates": [
+        "fingerprint must match J12",
+        "output directory must be empty",
+        "Hohfeld Gold and Silver are not training data"
+      ],
+      "acceptance_criteria": [
+        "training manifest records base provenance separately from the new weights"
+      ],
+      "preparation_status": "AWAITING_AUTHORIZATION",
+      "authorization": "not_authorized",
+      "technical_block": false,
+      "block_reasons": [],
+      "training": true,
+      "included_in_submit_all": true,
+      "evaluation": {
+        "protocol_id": "SOTA_NATIVE",
+        "publish": false,
+        "estimand": "upstream_eval_overall_f1",
+        "p0_applicable": false
+      },
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": "scientific_comparable",
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "J13"
+    },
+    {
+      "program": "SOTA",
+      "system_id": "uie",
+      "dataset_id": "conll04_uie",
+      "split": "seed1_10shot",
+      "condition": null,
+      "protocol_id": "SOTA_NATIVE",
+      "summary": "Technical smoke of the best UIE checkpoint through the clean adapter.",
+      "inputs": [
+        "J13 best checkpoint",
+        "J10 example"
+      ],
+      "outputs": [
+        "runs/p3/uie/positive_smoke/"
+      ],
+      "dependencies": [
+        "J13",
+        "J10"
+      ],
+      "resource_profile_id": "v100-infer",
+      "resources": {
+        "process_ram": "32G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/j14_uie_positive_smoke.sbatch",
+        "invoked_by": "scripts/cesvima/submit_train_first.sh"
+      },
+      "gates": [
+        "do not pass the base SHA as the fine-tuned revision"
+      ],
+      "acceptance_criteria": [
+        "parsed_structures is non-empty",
+        "relation recovery does not by itself decide the exit code"
+      ],
+      "preparation_status": "AWAITING_AUTHORIZATION",
+      "authorization": "not_authorized",
+      "technical_block": false,
+      "block_reasons": [],
+      "training": false,
+      "included_in_submit_all": true,
+      "evaluation": {
+        "protocol_id": "SOTA_NATIVE",
+        "publish": false,
+        "estimand": "technical_smoke",
+        "p0_applicable": false
+      },
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": "not_comparable",
+      "requires_checkpoint_identity": false,
+      "requires_tokenizer": false,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "J14"
+    },
+    {
+      "program": "SOTA",
+      "system_id": "gollie",
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "L40S preflight without downloading the 7B weights.",
+      "inputs": [
+        "gollie-l40s environment"
+      ],
+      "outputs": [
+        "runs/p3/gollie/preflight_report.json"
+      ],
+      "dependencies": [],
+      "resource_profile_id": "l40s-infer",
+      "resources": {
+        "process_ram": "64G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/j15_gollie_preflight.sbatch",
+        "invoked_by": "scripts/cesvima/submit_train_first.sh"
+      },
+      "gates": [
+        "bf16 matmul is finite",
+        "scratch free space at least 40 GiB",
+        "no A100 fallback"
+      ],
+      "acceptance_criteria": [
+        "status PASS and weights_downloaded is false"
+      ],
+      "preparation_status": "AWAITING_AUTHORIZATION",
+      "authorization": "not_authorized",
+      "technical_block": false,
+      "block_reasons": [],
+      "training": false,
+      "included_in_submit_all": true,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": false,
+      "requires_tokenizer": false,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "J15"
+    },
+    {
+      "program": "SOTA",
+      "system_id": "gollie",
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "Download GoLLIE-7B only after J15 passes.",
+      "inputs": [
+        "HiTZ/GoLLIE-7B@d3e41fef45f6a7d438c46ba7d9fce5d0d486c7a9"
+      ],
+      "outputs": [
+        "runs/p3/gollie/snapshot.json"
+      ],
+      "dependencies": [
+        "J15"
+      ],
+      "resource_profile_id": "cpu-acquire",
+      "resources": {
+        "process_ram": "8G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/j16_gollie_download.sbatch",
+        "invoked_by": "scripts/cesvima/submit_train_first.sh"
+      },
+      "gates": [
+        "versioned job contract"
+      ],
+      "acceptance_criteria": [
+        "download is refused unless J15 status is PASS and weights were not already marked downloaded"
+      ],
+      "preparation_status": "AWAITING_AUTHORIZATION",
+      "authorization": "not_authorized",
+      "technical_block": false,
+      "block_reasons": [],
+      "training": false,
+      "included_in_submit_all": true,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "J16"
+    },
+    {
+      "program": "SOTA",
+      "system_id": "gollie",
+      "dataset_id": "gollie_official_re_fixture",
+      "split": "official_re",
+      "condition": null,
+      "protocol_id": "SOTA_NATIVE",
+      "summary": "Native GoLLIE smoke on the official English fixture. Local adapter status remains BLOCKED_GPU until this job passes.",
+      "inputs": [
+        "tests/fixtures/gollie/official_re_*"
+      ],
+      "outputs": [
+        "runs/p3/gollie/native-smoke/"
+      ],
+      "dependencies": [
+        "J16"
+      ],
+      "resource_profile_id": "l40s-infer",
+      "resources": {
+        "process_ram": "64G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/j17_gollie_native_smoke.sbatch",
+        "invoked_by": "scripts/cesvima/submit_train_first.sh"
+      },
+      "gates": [
+        "quantization none",
+        "no Hohfeld fine-tuning"
+      ],
+      "acceptance_criteria": [
+        "four artifacts, inputs_succeeded is 1, revision d3e41fef45f6a7d438c46ba7d9fce5d0d486c7a9"
+      ],
+      "preparation_status": "AWAITING_AUTHORIZATION",
+      "authorization": "not_authorized",
+      "technical_block": false,
+      "block_reasons": [],
+      "training": false,
+      "included_in_submit_all": true,
+      "evaluation": {
+        "protocol_id": "SOTA_NATIVE",
+        "publish": false,
+        "estimand": "technical_smoke",
+        "p0_applicable": false
+      },
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": "not_comparable",
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "J17"
+    },
+    {
+      "program": "SOTA",
+      "system_id": "genie",
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "Download and verify genie_r.ckpt by size and MD5. Do not deserialize it.",
+      "inputs": [
+        "Zenodo genie_r.ckpt, 4879373206 bytes"
+      ],
+      "outputs": [
+        "models/genie/genie_r.ckpt"
+      ],
+      "dependencies": [],
+      "resource_profile_id": "cpu-acquire",
+      "resources": {
+        "process_ram": "8G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/j18_genie_download_ckpt.sbatch",
+        "invoked_by": "scripts/cesvima/submit_train_first.sh"
+      },
+      "gates": [
+        "versioned job contract"
+      ],
+      "acceptance_criteria": [
+        "size and MD5 c214da56b6e5d5bd259e0cbe826d92f7 match"
+      ],
+      "preparation_status": "AWAITING_AUTHORIZATION",
+      "authorization": "not_authorized",
+      "technical_block": false,
+      "block_reasons": [],
+      "training": false,
+      "included_in_submit_all": true,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": false,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "J18"
+    },
+    {
+      "program": "SOTA",
+      "system_id": "genie",
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "Download the pinned GENIE tokenizer repository.",
+      "inputs": [
+        "martinjosifoski/genie-rw@81eb2ccca714fbb62a65283b65c9c153469ee409"
+      ],
+      "outputs": [
+        "runs/p3/genie/tokenizer_snapshot.json"
+      ],
+      "dependencies": [
+        "J00"
+      ],
+      "resource_profile_id": "cpu-acquire",
+      "resources": {
+        "process_ram": "8G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/j19_genie_download_tokenizer.sbatch",
+        "invoked_by": "scripts/cesvima/submit_train_first.sh"
+      },
+      "gates": [
+        "versioned job contract"
+      ],
+      "acceptance_criteria": [
+        "tokenizer snapshot records the pinned revision"
+      ],
+      "preparation_status": "AWAITING_AUTHORIZATION",
+      "authorization": "not_authorized",
+      "technical_block": false,
+      "block_reasons": [],
+      "training": false,
+      "included_in_submit_all": true,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": false,
+      "requires_tokenizer": true,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "J19"
+    },
+    {
+      "program": "SOTA",
+      "system_id": "genie",
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "Download and verify tries.zip by size and MD5. Do not unzip it into a loader.",
+      "inputs": [
+        "Zenodo tries.zip, 94255261 bytes"
+      ],
+      "outputs": [
+        "models/genie/tries.zip"
+      ],
+      "dependencies": [],
+      "resource_profile_id": "cpu-acquire",
+      "resources": {
+        "process_ram": "8G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/j20_genie_download_tries.sbatch",
+        "invoked_by": "scripts/cesvima/submit_train_first.sh"
+      },
+      "gates": [
+        "versioned job contract"
+      ],
+      "acceptance_criteria": [
+        "size and MD5 45db4dc2578cdeda891d8ed6ddb3f89f match"
+      ],
+      "preparation_status": "AWAITING_AUTHORIZATION",
+      "authorization": "not_authorized",
+      "technical_block": false,
+      "block_reasons": [],
+      "training": false,
+      "included_in_submit_all": true,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": false,
+      "requires_tokenizer": false,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "J20"
+    },
+    {
+      "program": "SOTA",
+      "system_id": "genie",
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "GENIE generation. Visible and blocked: the extractor raises before generation.",
+      "inputs": [
+        "genie_r.ckpt",
+        "tries.zip",
+        "pinned tokenizer"
+      ],
+      "outputs": [],
+      "dependencies": [
+        "J18",
+        "J19",
+        "J20"
+      ],
+      "resource_profile_id": "unassigned",
+      "resources": {
+        "process_ram": null,
+        "vram": null
+      },
+      "executor": {
+        "kind": "none",
+        "path": null,
+        "invoked_by": null
+      },
+      "gates": [
+        "do not invent a Lightning loader in this registry"
+      ],
+      "acceptance_criteria": [
+        "no inference job is submitted"
+      ],
+      "preparation_status": "BLOCKED",
+      "authorization": "not_authorized",
+      "technical_block": true,
+      "block_reasons": [
+        {
+          "code": "BLOCKED_LOADER",
+          "evidence": "GenIEExtractor raises before generation, including with authorize-checkpoint-load."
+        }
+      ],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": true,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "GENIE-INFERENCE"
+    },
+    {
+      "program": "SOTA",
+      "system_id": "pythia",
+      "dataset_id": "space_kbp",
+      "split": "not_versioned_here",
+      "condition": null,
+      "protocol_id": null,
+      "summary": "Pythia SPACE-KBP baseline. Visible and blocked: fine-tuned weight license is undeclared.",
+      "inputs": [],
+      "outputs": [],
+      "dependencies": [],
+      "resource_profile_id": "unassigned",
+      "resources": {
+        "process_ram": null,
+        "vram": null
+      },
+      "executor": {
+        "kind": "none",
+        "path": null,
+        "invoked_by": null
+      },
+      "gates": [
+        "do not download the fine-tuned checkpoint"
+      ],
+      "acceptance_criteria": [
+        "no Pythia job exists in scripts/cesvima or jobs/cesvima"
+      ],
+      "preparation_status": "BLOCKED",
+      "authorization": "not_authorized",
+      "technical_block": true,
+      "block_reasons": [
+        {
+          "code": "BLOCKED_LICENSE",
+          "evidence": "The fine-tuned expertailab checkpoint card does not declare a weight license."
+        }
+      ],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "PYTHIA"
+    }
+  ]
+}

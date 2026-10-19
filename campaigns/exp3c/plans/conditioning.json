@@ -1,0 +1,1546 @@
+{
+  "catalog_version": "exp3c1-1",
+  "program": "CONDITIONING",
+  "harness_contract": "exp3b1-1",
+  "shell": {
+    "id": "common-instruction-shell-v2",
+    "template_sha256": "015cdf309f29a6005c8772132a0e563f7d9c3b4fd73c4b0ce1ba7d83e6aff84c",
+    "template_characters": 1374,
+    "instruction_text_stored": false,
+    "source": "re_te_benchmark.conditioning.shell.shell_template",
+    "slots": {
+      "C0": {
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "characters": 0
+      },
+      "C1": {
+        "sha256": "4a1f3324fbcb51edfd06fc3148dc94a1a4b0be23dc37ace46f56e8940e723d8b",
+        "characters": 54
+      },
+      "C2": {
+        "sha256": "314a220d1916c260ff6f94c731225c43a39fa8136719794586298d47fdbe57fc",
+        "characters": 5672
+      },
+      "C3": {
+        "sha256": "05e93a3a7d7ccf31e9a6c3d78380aa5bf490694b31c1e59e17091a6ce8d57da6",
+        "characters": 9140
+      },
+      "C3-NL": {
+        "sha256": "7977908229d96c7f2333c3875818b1039726eccc3f3a0b558a5c20d9edd7467f",
+        "characters": 12778
+      }
+    }
+  },
+  "condition_policy": {
+    "C0": {
+      "readiness": "READY",
+      "scientifically_executable": false,
+      "reason": "execution_not_approved"
+    },
+    "C1": {
+      "readiness": "READY",
+      "scientifically_executable": false,
+      "reason": "execution_not_approved"
+    },
+    "C2": {
+      "readiness": "PARTIAL",
+      "scientifically_executable": false,
+      "reason": "PARTIAL"
+    },
+    "C3": {
+      "readiness": "NOT_READY",
+      "scientifically_executable": false,
+      "reason": "NOT_EXECUTABLE"
+    },
+    "C3-NL": {
+      "readiness": "NOT_EXECUTABLE",
+      "scientifically_executable": false,
+      "reason": "does_not_authorize_C3",
+      "authorizes": []
+    }
+  },
+  "notes": [
+    "CESVIMA_TRAIN_FIRST.md still says C0 and C1 have no common prompt. Shell v2 and harness exp3b1-1 exist at the same system commit.",
+    "Neither backbone is selected by being listed here.",
+    "C2 stays PARTIAL. C3 stays NOT_READY and NOT_EXECUTABLE. C3-NL does not authorize C3."
+  ],
+  "tasks": [
+    {
+      "program": "CONDITIONING",
+      "system_id": "qwen3_4b_instruct_2507",
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "Pin the immutable Qwen revision and tokenizer revision. Do not download weights in this registry.",
+      "inputs": [],
+      "outputs": [
+        "future identity record, not created here"
+      ],
+      "dependencies": [],
+      "resource_profile_id": "unassigned",
+      "resources": {
+        "process_ram": null,
+        "vram": null
+      },
+      "executor": {
+        "kind": "not_versioned",
+        "path": null,
+        "invoked_by": null
+      },
+      "gates": [
+        "40-character revision required before any generation task can leave BLOCKED"
+      ],
+      "acceptance_criteria": [
+        "checkpoint and tokenizer revisions are recorded without loading weights here"
+      ],
+      "preparation_status": "BLOCKED",
+      "authorization": "not_authorized",
+      "technical_block": true,
+      "block_reasons": [
+        {
+          "code": "checkpoint_identity_unresolved",
+          "evidence": "Qwen/Qwen3-4B-Instruct-2507 has no pinned 40-character revision in this registry."
+        },
+        {
+          "code": "tokenizer_unverified",
+          "evidence": "The tokenizer revision was not resolved and the tokenizer was not loaded."
+        }
+      ],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "QWEN-IDENTITY"
+    },
+    {
+      "program": "CONDITIONING",
+      "system_id": "qwen3_4b_instruct_2507",
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "Future real preflight of shell v2 prompts. Not a model run.",
+      "inputs": [
+        "QWEN-IDENTITY",
+        "shell v2 hashes"
+      ],
+      "outputs": [
+        "future per-document token report"
+      ],
+      "dependencies": [
+        "QWEN-IDENTITY"
+      ],
+      "resource_profile_id": "unassigned",
+      "resources": {
+        "process_ram": null,
+        "vram": null
+      },
+      "executor": {
+        "kind": "not_versioned",
+        "path": null,
+        "invoked_by": null
+      },
+      "gates": [
+        "context block instead of truncation",
+        "invented text only until a campaign is authorized"
+      ],
+      "acceptance_criteria": [
+        "preflight_done remains false in this registry"
+      ],
+      "preparation_status": "BLOCKED",
+      "authorization": "not_authorized",
+      "technical_block": true,
+      "block_reasons": [
+        {
+          "code": "checkpoint_identity_unresolved",
+          "evidence": "Qwen/Qwen3-4B-Instruct-2507 has no pinned 40-character revision in this registry."
+        },
+        {
+          "code": "tokenizer_unverified",
+          "evidence": "The tokenizer revision was not resolved and the tokenizer was not loaded."
+        },
+        {
+          "code": "real_preflight_missing",
+          "evidence": "No real tokenizer has measured the shell-plus-document prompts."
+        },
+        {
+          "code": "truncation_guard_absent",
+          "evidence": "No conditioning adapter currently guarantees that over-long prompts are blocked instead of truncated."
+        },
+        {
+          "code": "output_budget_unfrozen",
+          "evidence": "max_new_tokens for the conditioning campaign is not frozen."
+        },
+        {
+          "code": "execution_not_approved",
+          "evidence": "Appearing in this plan does not authorize a campaign."
+        }
+      ],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": true,
+      "real_preflight_done": false,
+      "requires_no_truncation": true,
+      "requires_frozen_output_budget": true,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "QWEN-PREFLIGHT"
+    },
+    {
+      "program": "CONDITIONING",
+      "system_id": "qwen3_4b_instruct_2507",
+      "dataset_id": "teresia_hohfeld",
+      "split": "canonical_documents",
+      "condition": "C0",
+      "protocol_id": "CONDITIONING_PRIMARY",
+      "summary": "Designed generation arm C0. Not executable.",
+      "inputs": [
+        "shell v2",
+        "slot C0",
+        "36 canonical documents"
+      ],
+      "outputs": [
+        "conditions/C0/predictions.jsonl"
+      ],
+      "dependencies": [
+        "QWEN-PREFLIGHT"
+      ],
+      "resource_profile_id": "unassigned",
+      "resources": {
+        "process_ram": null,
+        "vram": null
+      },
+      "executor": {
+        "kind": "not_versioned",
+        "path": null,
+        "invoked_by": null
+      },
+      "gates": [
+        "same checkpoint for every arm of this backbone",
+        "do not truncate the prompt to fit"
+      ],
+      "acceptance_criteria": [
+        "generation is not started while this task is BLOCKED"
+      ],
+      "preparation_status": "BLOCKED",
+      "authorization": "not_authorized",
+      "technical_block": true,
+      "block_reasons": [
+        {
+          "code": "checkpoint_identity_unresolved",
+          "evidence": "Qwen/Qwen3-4B-Instruct-2507 has no pinned 40-character revision in this registry."
+        },
+        {
+          "code": "tokenizer_unverified",
+          "evidence": "The tokenizer revision was not resolved and the tokenizer was not loaded."
+        },
+        {
+          "code": "real_preflight_missing",
+          "evidence": "No real tokenizer has measured the shell-plus-document prompts."
+        },
+        {
+          "code": "truncation_guard_absent",
+          "evidence": "No conditioning adapter currently guarantees that over-long prompts are blocked instead of truncated."
+        },
+        {
+          "code": "output_budget_unfrozen",
+          "evidence": "max_new_tokens for the conditioning campaign is not frozen."
+        },
+        {
+          "code": "execution_not_approved",
+          "evidence": "Appearing in this plan does not authorize a campaign."
+        }
+      ],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "one_retry_for_infrastructure_or_timeout_only_after_authorization_and_identical_across_conditions",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": true,
+      "real_preflight_done": false,
+      "requires_no_truncation": true,
+      "requires_frozen_output_budget": true,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "QWEN-C0"
+    },
+    {
+      "program": "CONDITIONING",
+      "system_id": "qwen3_4b_instruct_2507",
+      "dataset_id": "teresia_hohfeld",
+      "split": "canonical_documents",
+      "condition": "C1",
+      "protocol_id": "CONDITIONING_PRIMARY",
+      "summary": "Designed generation arm C1. Not executable.",
+      "inputs": [
+        "shell v2",
+        "slot C1",
+        "36 canonical documents"
+      ],
+      "outputs": [
+        "conditions/C1/predictions.jsonl"
+      ],
+      "dependencies": [
+        "QWEN-PREFLIGHT"
+      ],
+      "resource_profile_id": "unassigned",
+      "resources": {
+        "process_ram": null,
+        "vram": null
+      },
+      "executor": {
+        "kind": "not_versioned",
+        "path": null,
+        "invoked_by": null
+      },
+      "gates": [
+        "same checkpoint for every arm of this backbone",
+        "do not truncate the prompt to fit"
+      ],
+      "acceptance_criteria": [
+        "generation is not started while this task is BLOCKED"
+      ],
+      "preparation_status": "BLOCKED",
+      "authorization": "not_authorized",
+      "technical_block": true,
+      "block_reasons": [
+        {
+          "code": "checkpoint_identity_unresolved",
+          "evidence": "Qwen/Qwen3-4B-Instruct-2507 has no pinned 40-character revision in this registry."
+        },
+        {
+          "code": "tokenizer_unverified",
+          "evidence": "The tokenizer revision was not resolved and the tokenizer was not loaded."
+        },
+        {
+          "code": "real_preflight_missing",
+          "evidence": "No real tokenizer has measured the shell-plus-document prompts."
+        },
+        {
+          "code": "truncation_guard_absent",
+          "evidence": "No conditioning adapter currently guarantees that over-long prompts are blocked instead of truncated."
+        },
+        {
+          "code": "output_budget_unfrozen",
+          "evidence": "max_new_tokens for the conditioning campaign is not frozen."
+        },
+        {
+          "code": "execution_not_approved",
+          "evidence": "Appearing in this plan does not authorize a campaign."
+        }
+      ],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "one_retry_for_infrastructure_or_timeout_only_after_authorization_and_identical_across_conditions",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": true,
+      "real_preflight_done": false,
+      "requires_no_truncation": true,
+      "requires_frozen_output_budget": true,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "QWEN-C1"
+    },
+    {
+      "program": "CONDITIONING",
+      "system_id": "qwen3_4b_instruct_2507",
+      "dataset_id": "teresia_hohfeld",
+      "split": "canonical_documents",
+      "condition": "C2",
+      "protocol_id": "CONDITIONING_PRIMARY",
+      "summary": "Designed generation arm C2. Not executable.",
+      "inputs": [
+        "shell v2",
+        "slot C2",
+        "36 canonical documents"
+      ],
+      "outputs": [
+        "conditions/C2/predictions.jsonl"
+      ],
+      "dependencies": [
+        "QWEN-PREFLIGHT"
+      ],
+      "resource_profile_id": "unassigned",
+      "resources": {
+        "process_ram": null,
+        "vram": null
+      },
+      "executor": {
+        "kind": "not_versioned",
+        "path": null,
+        "invoked_by": null
+      },
+      "gates": [
+        "same checkpoint for every arm of this backbone",
+        "do not truncate the prompt to fit"
+      ],
+      "acceptance_criteria": [
+        "generation is not started while this task is BLOCKED"
+      ],
+      "preparation_status": "BLOCKED",
+      "authorization": "not_authorized",
+      "technical_block": true,
+      "block_reasons": [
+        {
+          "code": "checkpoint_identity_unresolved",
+          "evidence": "Qwen/Qwen3-4B-Instruct-2507 has no pinned 40-character revision in this registry."
+        },
+        {
+          "code": "tokenizer_unverified",
+          "evidence": "The tokenizer revision was not resolved and the tokenizer was not loaded."
+        },
+        {
+          "code": "real_preflight_missing",
+          "evidence": "No real tokenizer has measured the shell-plus-document prompts."
+        },
+        {
+          "code": "truncation_guard_absent",
+          "evidence": "No conditioning adapter currently guarantees that over-long prompts are blocked instead of truncated."
+        },
+        {
+          "code": "output_budget_unfrozen",
+          "evidence": "max_new_tokens for the conditioning campaign is not frozen."
+        },
+        {
+          "code": "execution_not_approved",
+          "evidence": "Appearing in this plan does not authorize a campaign."
+        },
+        {
+          "code": "PARTIAL",
+          "evidence": "C2 readiness remains PARTIAL."
+        }
+      ],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "one_retry_for_infrastructure_or_timeout_only_after_authorization_and_identical_across_conditions",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": true,
+      "real_preflight_done": false,
+      "requires_no_truncation": true,
+      "requires_frozen_output_budget": true,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "QWEN-C2"
+    },
+    {
+      "program": "CONDITIONING",
+      "system_id": "qwen3_4b_instruct_2507",
+      "dataset_id": "teresia_hohfeld",
+      "split": "canonical_documents",
+      "condition": "C3",
+      "protocol_id": "CONDITIONING_PRIMARY",
+      "summary": "Designed generation arm C3. Not executable.",
+      "inputs": [
+        "shell v2",
+        "slot C3",
+        "36 canonical documents"
+      ],
+      "outputs": [
+        "conditions/C3/predictions.jsonl"
+      ],
+      "dependencies": [
+        "QWEN-PREFLIGHT"
+      ],
+      "resource_profile_id": "unassigned",
+      "resources": {
+        "process_ram": null,
+        "vram": null
+      },
+      "executor": {
+        "kind": "not_versioned",
+        "path": null,
+        "invoked_by": null
+      },
+      "gates": [
+        "same checkpoint for every arm of this backbone",
+        "do not truncate the prompt to fit"
+      ],
+      "acceptance_criteria": [
+        "generation is not started while this task is BLOCKED"
+      ],
+      "preparation_status": "BLOCKED",
+      "authorization": "not_authorized",
+      "technical_block": true,
+      "block_reasons": [
+        {
+          "code": "checkpoint_identity_unresolved",
+          "evidence": "Qwen/Qwen3-4B-Instruct-2507 has no pinned 40-character revision in this registry."
+        },
+        {
+          "code": "tokenizer_unverified",
+          "evidence": "The tokenizer revision was not resolved and the tokenizer was not loaded."
+        },
+        {
+          "code": "real_preflight_missing",
+          "evidence": "No real tokenizer has measured the shell-plus-document prompts."
+        },
+        {
+          "code": "truncation_guard_absent",
+          "evidence": "No conditioning adapter currently guarantees that over-long prompts are blocked instead of truncated."
+        },
+        {
+          "code": "output_budget_unfrozen",
+          "evidence": "max_new_tokens for the conditioning campaign is not frozen."
+        },
+        {
+          "code": "execution_not_approved",
+          "evidence": "Appearing in this plan does not authorize a campaign."
+        },
+        {
+          "code": "NOT_READY",
+          "evidence": "C3 readiness remains NOT_READY."
+        },
+        {
+          "code": "NOT_EXECUTABLE",
+          "evidence": "C3 remains NOT_EXECUTABLE."
+        }
+      ],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "one_retry_for_infrastructure_or_timeout_only_after_authorization_and_identical_across_conditions",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": true,
+      "real_preflight_done": false,
+      "requires_no_truncation": true,
+      "requires_frozen_output_budget": true,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "QWEN-C3"
+    },
+    {
+      "program": "CONDITIONING",
+      "system_id": "qwen3_4b_instruct_2507",
+      "dataset_id": "teresia_hohfeld",
+      "split": "canonical_documents",
+      "condition": "C3-NL",
+      "protocol_id": "CONDITIONING_PRIMARY",
+      "summary": "Designed generation arm C3-NL. Not executable.",
+      "inputs": [
+        "shell v2",
+        "slot C3-NL",
+        "36 canonical documents"
+      ],
+      "outputs": [
+        "conditions/C3-NL/predictions.jsonl"
+      ],
+      "dependencies": [
+        "QWEN-PREFLIGHT"
+      ],
+      "resource_profile_id": "unassigned",
+      "resources": {
+        "process_ram": null,
+        "vram": null
+      },
+      "executor": {
+        "kind": "not_versioned",
+        "path": null,
+        "invoked_by": null
+      },
+      "gates": [
+        "same checkpoint for every arm of this backbone",
+        "do not truncate the prompt to fit"
+      ],
+      "acceptance_criteria": [
+        "generation is not started while this task is BLOCKED"
+      ],
+      "preparation_status": "BLOCKED",
+      "authorization": "not_authorized",
+      "technical_block": true,
+      "block_reasons": [
+        {
+          "code": "checkpoint_identity_unresolved",
+          "evidence": "Qwen/Qwen3-4B-Instruct-2507 has no pinned 40-character revision in this registry."
+        },
+        {
+          "code": "tokenizer_unverified",
+          "evidence": "The tokenizer revision was not resolved and the tokenizer was not loaded."
+        },
+        {
+          "code": "real_preflight_missing",
+          "evidence": "No real tokenizer has measured the shell-plus-document prompts."
+        },
+        {
+          "code": "truncation_guard_absent",
+          "evidence": "No conditioning adapter currently guarantees that over-long prompts are blocked instead of truncated."
+        },
+        {
+          "code": "output_budget_unfrozen",
+          "evidence": "max_new_tokens for the conditioning campaign is not frozen."
+        },
+        {
+          "code": "execution_not_approved",
+          "evidence": "Appearing in this plan does not authorize a campaign."
+        },
+        {
+          "code": "NOT_EXECUTABLE",
+          "evidence": "C3-NL is not an executable campaign arm."
+        },
+        {
+          "code": "does_not_authorize_C3",
+          "evidence": "C3-NL does not authorize C3."
+        }
+      ],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "one_retry_for_infrastructure_or_timeout_only_after_authorization_and_identical_across_conditions",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": true,
+      "real_preflight_done": false,
+      "requires_no_truncation": true,
+      "requires_frozen_output_budget": true,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "QWEN-C3-NL"
+    },
+    {
+      "program": "CONDITIONING",
+      "system_id": "qwen3_4b_instruct_2507",
+      "dataset_id": "teresia_hohfeld",
+      "split": "canonical_annotations",
+      "condition": null,
+      "protocol_id": "CONDITIONING_PRIMARY",
+      "summary": "Future three-estimand evaluation for the primary backbone. No score is produced here.",
+      "inputs": [
+        "per-condition exports"
+      ],
+      "outputs": [],
+      "dependencies": [
+        "QWEN-C0",
+        "QWEN-C1",
+        "QWEN-C2",
+        "QWEN-C3",
+        "QWEN-C3-NL"
+      ],
+      "resource_profile_id": "cpu-acquire",
+      "resources": {
+        "process_ram": "8G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "not_versioned",
+        "path": null,
+        "invoked_by": null
+      },
+      "gates": [
+        "P0 evaluator unchanged",
+        "61 occurrences are not a fixed F1 denominator"
+      ],
+      "acceptance_criteria": [
+        "no leaderboard row is written by this registry"
+      ],
+      "preparation_status": "BLOCKED",
+      "authorization": "not_authorized",
+      "technical_block": true,
+      "block_reasons": [
+        {
+          "code": "checkpoint_identity_unresolved",
+          "evidence": "Qwen/Qwen3-4B-Instruct-2507 has no pinned 40-character revision in this registry."
+        },
+        {
+          "code": "tokenizer_unverified",
+          "evidence": "The tokenizer revision was not resolved and the tokenizer was not loaded."
+        },
+        {
+          "code": "real_preflight_missing",
+          "evidence": "No real tokenizer has measured the shell-plus-document prompts."
+        },
+        {
+          "code": "truncation_guard_absent",
+          "evidence": "No conditioning adapter currently guarantees that over-long prompts are blocked instead of truncated."
+        },
+        {
+          "code": "output_budget_unfrozen",
+          "evidence": "max_new_tokens for the conditioning campaign is not frozen."
+        },
+        {
+          "code": "execution_not_approved",
+          "evidence": "Appearing in this plan does not authorize a campaign."
+        },
+        {
+          "code": "PARTIAL",
+          "evidence": "C2 readiness remains PARTIAL."
+        },
+        {
+          "code": "NOT_READY",
+          "evidence": "C3 readiness remains NOT_READY."
+        },
+        {
+          "code": "NOT_EXECUTABLE",
+          "evidence": "C3 remains NOT_EXECUTABLE."
+        },
+        {
+          "code": "NOT_EXECUTABLE",
+          "evidence": "C3-NL is not an executable campaign arm."
+        },
+        {
+          "code": "does_not_authorize_C3",
+          "evidence": "C3-NL does not authorize C3."
+        }
+      ],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": {
+        "protocol_id": "CONDITIONING_PRIMARY",
+        "publish": false,
+        "estimands": [
+          "conservative_operational_f1",
+          "f1_conditional_on_completed_generation",
+          "paired_secondary_f1"
+        ]
+      },
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": "scientific_comparable",
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": true,
+      "real_preflight_done": false,
+      "requires_no_truncation": true,
+      "requires_frozen_output_budget": true,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "QWEN-EVAL"
+    },
+    {
+      "program": "CONDITIONING",
+      "system_id": "gemma4_12b_it",
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "Future isolated environment with transformers>=5.10.1. Do not modify the 4.57.6 or baseline environments.",
+      "inputs": [],
+      "outputs": [
+        "not created"
+      ],
+      "dependencies": [],
+      "resource_profile_id": "unassigned",
+      "resources": {
+        "process_ram": null,
+        "vram": null
+      },
+      "executor": {
+        "kind": "not_versioned",
+        "path": null,
+        "invoked_by": null
+      },
+      "gates": [
+        "do not upgrade re_te_system_gpu_312",
+        "do not alter REBEL, mREBEL, UIE, or GoLLIE environments"
+      ],
+      "acceptance_criteria": [
+        "no environment is created by this registry"
+      ],
+      "preparation_status": "BLOCKED",
+      "authorization": "not_authorized",
+      "technical_block": true,
+      "block_reasons": [
+        {
+          "code": "transformers_4_57_6_incompatible",
+          "evidence": "The pinned inference environment has no gemma4_unified class."
+        }
+      ],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": false,
+      "requires_tokenizer": false,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "GEMMA-ENV"
+    },
+    {
+      "program": "CONDITIONING",
+      "system_id": "gemma4_12b_it",
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "Checkpoint revision is recorded. Tokenizer revision is not.",
+      "inputs": [
+        "google/gemma-4-12B-it@707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7"
+      ],
+      "outputs": [],
+      "dependencies": [
+        "GEMMA-ENV"
+      ],
+      "resource_profile_id": "unassigned",
+      "resources": {
+        "process_ram": null,
+        "vram": null
+      },
+      "executor": {
+        "kind": "not_versioned",
+        "path": null,
+        "invoked_by": null
+      },
+      "gates": [
+        "do not substitute google/gemma-4-12B"
+      ],
+      "acceptance_criteria": [
+        "tokenizer revision remains null until a later authorized resolution"
+      ],
+      "preparation_status": "BLOCKED",
+      "authorization": "not_authorized",
+      "technical_block": true,
+      "block_reasons": [
+        {
+          "code": "tokenizer_unverified",
+          "evidence": "tokenizer.json was not downloaded and its revision is null."
+        },
+        {
+          "code": "transformers_4_57_6_incompatible",
+          "evidence": "The pinned inference environment has no gemma4_unified class."
+        }
+      ],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "GEMMA-IDENTITY"
+    },
+    {
+      "program": "CONDITIONING",
+      "system_id": "gemma4_12b_it",
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "Prove on invented text that the official response parser returns only the answer channel.",
+      "inputs": [],
+      "outputs": [],
+      "dependencies": [
+        "GEMMA-IDENTITY"
+      ],
+      "resource_profile_id": "unassigned",
+      "resources": {
+        "process_ram": null,
+        "vram": null
+      },
+      "executor": {
+        "kind": "not_versioned",
+        "path": null,
+        "invoked_by": null
+      },
+      "gates": [
+        "the separator is identical for every condition",
+        "it must not edit triples by condition"
+      ],
+      "acceptance_criteria": [
+        "channel_separator_verified remains false in this registry"
+      ],
+      "preparation_status": "BLOCKED",
+      "authorization": "not_authorized",
+      "technical_block": true,
+      "block_reasons": [
+        {
+          "code": "channel_separator_unverified",
+          "evidence": "enable_thinking false still inserts an empty thought channel. parse_response has not been shown to return only the answer channel."
+        }
+      ],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": true,
+      "id": "GEMMA-CHANNEL"
+    },
+    {
+      "program": "CONDITIONING",
+      "system_id": "gemma4_12b_it",
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "Future real preflight. 256K context is not assumed to fit one GPU.",
+      "inputs": [],
+      "outputs": [],
+      "dependencies": [
+        "GEMMA-IDENTITY",
+        "GEMMA-CHANNEL"
+      ],
+      "resource_profile_id": "unassigned",
+      "resources": {
+        "process_ram": null,
+        "vram": null
+      },
+      "executor": {
+        "kind": "not_versioned",
+        "path": null,
+        "invoked_by": null
+      },
+      "gates": [
+        "VRAM remains null until measured",
+        "do not assign an A100 by editing the existing job guard"
+      ],
+      "acceptance_criteria": [
+        "preflight_done remains false in this registry"
+      ],
+      "preparation_status": "BLOCKED",
+      "authorization": "not_authorized",
+      "technical_block": true,
+      "block_reasons": [
+        {
+          "code": "tokenizer_unverified",
+          "evidence": "tokenizer.json was not downloaded and its revision is null."
+        },
+        {
+          "code": "real_preflight_missing",
+          "evidence": "No real tokenizer has measured the shell-plus-document prompts."
+        },
+        {
+          "code": "truncation_guard_absent",
+          "evidence": "No conditioning adapter currently guarantees that over-long prompts are blocked instead of truncated."
+        },
+        {
+          "code": "output_budget_unfrozen",
+          "evidence": "max_new_tokens for the conditioning campaign is not frozen."
+        },
+        {
+          "code": "channel_separator_unverified",
+          "evidence": "enable_thinking false still inserts an empty thought channel. parse_response has not been shown to return only the answer channel."
+        },
+        {
+          "code": "transformers_4_57_6_incompatible",
+          "evidence": "The pinned inference environment has no gemma4_unified class."
+        },
+        {
+          "code": "execution_not_approved",
+          "evidence": "Appearing in this plan does not authorize a campaign."
+        }
+      ],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": true,
+      "real_preflight_done": false,
+      "requires_no_truncation": true,
+      "requires_frozen_output_budget": true,
+      "output_budget_frozen": false,
+      "requires_channel_separator": true,
+      "id": "GEMMA-PREFLIGHT"
+    },
+    {
+      "program": "CONDITIONING",
+      "system_id": "gemma4_12b_it",
+      "dataset_id": "teresia_hohfeld",
+      "split": "canonical_documents",
+      "condition": "C0",
+      "protocol_id": "CONDITIONING_ROBUSTNESS",
+      "summary": "Designed generation arm C0. Not executable.",
+      "inputs": [
+        "shell v2",
+        "slot C0",
+        "36 canonical documents"
+      ],
+      "outputs": [
+        "conditions/C0/predictions.jsonl"
+      ],
+      "dependencies": [
+        "GEMMA-PREFLIGHT"
+      ],
+      "resource_profile_id": "unassigned",
+      "resources": {
+        "process_ram": null,
+        "vram": null
+      },
+      "executor": {
+        "kind": "not_versioned",
+        "path": null,
+        "invoked_by": null
+      },
+      "gates": [
+        "same checkpoint for every arm of this backbone",
+        "do not truncate the prompt to fit"
+      ],
+      "acceptance_criteria": [
+        "generation is not started while this task is BLOCKED"
+      ],
+      "preparation_status": "BLOCKED",
+      "authorization": "not_authorized",
+      "technical_block": true,
+      "block_reasons": [
+        {
+          "code": "tokenizer_unverified",
+          "evidence": "tokenizer.json was not downloaded and its revision is null."
+        },
+        {
+          "code": "real_preflight_missing",
+          "evidence": "No real tokenizer has measured the shell-plus-document prompts."
+        },
+        {
+          "code": "truncation_guard_absent",
+          "evidence": "No conditioning adapter currently guarantees that over-long prompts are blocked instead of truncated."
+        },
+        {
+          "code": "output_budget_unfrozen",
+          "evidence": "max_new_tokens for the conditioning campaign is not frozen."
+        },
+        {
+          "code": "channel_separator_unverified",
+          "evidence": "enable_thinking false still inserts an empty thought channel. parse_response has not been shown to return only the answer channel."
+        },
+        {
+          "code": "transformers_4_57_6_incompatible",
+          "evidence": "The pinned inference environment has no gemma4_unified class."
+        },
+        {
+          "code": "execution_not_approved",
+          "evidence": "Appearing in this plan does not authorize a campaign."
+        }
+      ],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "one_retry_for_infrastructure_or_timeout_only_after_authorization_and_identical_across_conditions",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": true,
+      "real_preflight_done": false,
+      "requires_no_truncation": true,
+      "requires_frozen_output_budget": true,
+      "output_budget_frozen": false,
+      "requires_channel_separator": true,
+      "id": "GEMMA-C0"
+    },
+    {
+      "program": "CONDITIONING",
+      "system_id": "gemma4_12b_it",
+      "dataset_id": "teresia_hohfeld",
+      "split": "canonical_documents",
+      "condition": "C1",
+      "protocol_id": "CONDITIONING_ROBUSTNESS",
+      "summary": "Designed generation arm C1. Not executable.",
+      "inputs": [
+        "shell v2",
+        "slot C1",
+        "36 canonical documents"
+      ],
+      "outputs": [
+        "conditions/C1/predictions.jsonl"
+      ],
+      "dependencies": [
+        "GEMMA-PREFLIGHT"
+      ],
+      "resource_profile_id": "unassigned",
+      "resources": {
+        "process_ram": null,
+        "vram": null
+      },
+      "executor": {
+        "kind": "not_versioned",
+        "path": null,
+        "invoked_by": null
+      },
+      "gates": [
+        "same checkpoint for every arm of this backbone",
+        "do not truncate the prompt to fit"
+      ],
+      "acceptance_criteria": [
+        "generation is not started while this task is BLOCKED"
+      ],
+      "preparation_status": "BLOCKED",
+      "authorization": "not_authorized",
+      "technical_block": true,
+      "block_reasons": [
+        {
+          "code": "tokenizer_unverified",
+          "evidence": "tokenizer.json was not downloaded and its revision is null."
+        },
+        {
+          "code": "real_preflight_missing",
+          "evidence": "No real tokenizer has measured the shell-plus-document prompts."
+        },
+        {
+          "code": "truncation_guard_absent",
+          "evidence": "No conditioning adapter currently guarantees that over-long prompts are blocked instead of truncated."
+        },
+        {
+          "code": "output_budget_unfrozen",
+          "evidence": "max_new_tokens for the conditioning campaign is not frozen."
+        },
+        {
+          "code": "channel_separator_unverified",
+          "evidence": "enable_thinking false still inserts an empty thought channel. parse_response has not been shown to return only the answer channel."
+        },
+        {
+          "code": "transformers_4_57_6_incompatible",
+          "evidence": "The pinned inference environment has no gemma4_unified class."
+        },
+        {
+          "code": "execution_not_approved",
+          "evidence": "Appearing in this plan does not authorize a campaign."
+        }
+      ],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "one_retry_for_infrastructure_or_timeout_only_after_authorization_and_identical_across_conditions",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": true,
+      "real_preflight_done": false,
+      "requires_no_truncation": true,
+      "requires_frozen_output_budget": true,
+      "output_budget_frozen": false,
+      "requires_channel_separator": true,
+      "id": "GEMMA-C1"
+    },
+    {
+      "program": "CONDITIONING",
+      "system_id": "gemma4_12b_it",
+      "dataset_id": "teresia_hohfeld",
+      "split": "canonical_documents",
+      "condition": "C2",
+      "protocol_id": "CONDITIONING_ROBUSTNESS",
+      "summary": "Designed generation arm C2. Not executable.",
+      "inputs": [
+        "shell v2",
+        "slot C2",
+        "36 canonical documents"
+      ],
+      "outputs": [
+        "conditions/C2/predictions.jsonl"
+      ],
+      "dependencies": [
+        "GEMMA-PREFLIGHT"
+      ],
+      "resource_profile_id": "unassigned",
+      "resources": {
+        "process_ram": null,
+        "vram": null
+      },
+      "executor": {
+        "kind": "not_versioned",
+        "path": null,
+        "invoked_by": null
+      },
+      "gates": [
+        "same checkpoint for every arm of this backbone",
+        "do not truncate the prompt to fit"
+      ],
+      "acceptance_criteria": [
+        "generation is not started while this task is BLOCKED"
+      ],
+      "preparation_status": "BLOCKED",
+      "authorization": "not_authorized",
+      "technical_block": true,
+      "block_reasons": [
+        {
+          "code": "tokenizer_unverified",
+          "evidence": "tokenizer.json was not downloaded and its revision is null."
+        },
+        {
+          "code": "real_preflight_missing",
+          "evidence": "No real tokenizer has measured the shell-plus-document prompts."
+        },
+        {
+          "code": "truncation_guard_absent",
+          "evidence": "No conditioning adapter currently guarantees that over-long prompts are blocked instead of truncated."
+        },
+        {
+          "code": "output_budget_unfrozen",
+          "evidence": "max_new_tokens for the conditioning campaign is not frozen."
+        },
+        {
+          "code": "channel_separator_unverified",
+          "evidence": "enable_thinking false still inserts an empty thought channel. parse_response has not been shown to return only the answer channel."
+        },
+        {
+          "code": "transformers_4_57_6_incompatible",
+          "evidence": "The pinned inference environment has no gemma4_unified class."
+        },
+        {
+          "code": "execution_not_approved",
+          "evidence": "Appearing in this plan does not authorize a campaign."
+        },
+        {
+          "code": "PARTIAL",
+          "evidence": "C2 readiness remains PARTIAL."
+        }
+      ],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "one_retry_for_infrastructure_or_timeout_only_after_authorization_and_identical_across_conditions",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": true,
+      "real_preflight_done": false,
+      "requires_no_truncation": true,
+      "requires_frozen_output_budget": true,
+      "output_budget_frozen": false,
+      "requires_channel_separator": true,
+      "id": "GEMMA-C2"
+    },
+    {
+      "program": "CONDITIONING",
+      "system_id": "gemma4_12b_it",
+      "dataset_id": "teresia_hohfeld",
+      "split": "canonical_documents",
+      "condition": "C3",
+      "protocol_id": "CONDITIONING_ROBUSTNESS",
+      "summary": "Designed generation arm C3. Not executable.",
+      "inputs": [
+        "shell v2",
+        "slot C3",
+        "36 canonical documents"
+      ],
+      "outputs": [
+        "conditions/C3/predictions.jsonl"
+      ],
+      "dependencies": [
+        "GEMMA-PREFLIGHT"
+      ],
+      "resource_profile_id": "unassigned",
+      "resources": {
+        "process_ram": null,
+        "vram": null
+      },
+      "executor": {
+        "kind": "not_versioned",
+        "path": null,
+        "invoked_by": null
+      },
+      "gates": [
+        "same checkpoint for every arm of this backbone",
+        "do not truncate the prompt to fit"
+      ],
+      "acceptance_criteria": [
+        "generation is not started while this task is BLOCKED"
+      ],
+      "preparation_status": "BLOCKED",
+      "authorization": "not_authorized",
+      "technical_block": true,
+      "block_reasons": [
+        {
+          "code": "tokenizer_unverified",
+          "evidence": "tokenizer.json was not downloaded and its revision is null."
+        },
+        {
+          "code": "real_preflight_missing",
+          "evidence": "No real tokenizer has measured the shell-plus-document prompts."
+        },
+        {
+          "code": "truncation_guard_absent",
+          "evidence": "No conditioning adapter currently guarantees that over-long prompts are blocked instead of truncated."
+        },
+        {
+          "code": "output_budget_unfrozen",
+          "evidence": "max_new_tokens for the conditioning campaign is not frozen."
+        },
+        {
+          "code": "channel_separator_unverified",
+          "evidence": "enable_thinking false still inserts an empty thought channel. parse_response has not been shown to return only the answer channel."
+        },
+        {
+          "code": "transformers_4_57_6_incompatible",
+          "evidence": "The pinned inference environment has no gemma4_unified class."
+        },
+        {
+          "code": "execution_not_approved",
+          "evidence": "Appearing in this plan does not authorize a campaign."
+        },
+        {
+          "code": "NOT_READY",
+          "evidence": "C3 readiness remains NOT_READY."
+        },
+        {
+          "code": "NOT_EXECUTABLE",
+          "evidence": "C3 remains NOT_EXECUTABLE."
+        }
+      ],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "one_retry_for_infrastructure_or_timeout_only_after_authorization_and_identical_across_conditions",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": true,
+      "real_preflight_done": false,
+      "requires_no_truncation": true,
+      "requires_frozen_output_budget": true,
+      "output_budget_frozen": false,
+      "requires_channel_separator": true,
+      "id": "GEMMA-C3"
+    },
+    {
+      "program": "CONDITIONING",
+      "system_id": "gemma4_12b_it",
+      "dataset_id": "teresia_hohfeld",
+      "split": "canonical_documents",
+      "condition": "C3-NL",
+      "protocol_id": "CONDITIONING_ROBUSTNESS",
+      "summary": "Designed generation arm C3-NL. Not executable.",
+      "inputs": [
+        "shell v2",
+        "slot C3-NL",
+        "36 canonical documents"
+      ],
+      "outputs": [
+        "conditions/C3-NL/predictions.jsonl"
+      ],
+      "dependencies": [
+        "GEMMA-PREFLIGHT"
+      ],
+      "resource_profile_id": "unassigned",
+      "resources": {
+        "process_ram": null,
+        "vram": null
+      },
+      "executor": {
+        "kind": "not_versioned",
+        "path": null,
+        "invoked_by": null
+      },
+      "gates": [
+        "same checkpoint for every arm of this backbone",
+        "do not truncate the prompt to fit"
+      ],
+      "acceptance_criteria": [
+        "generation is not started while this task is BLOCKED"
+      ],
+      "preparation_status": "BLOCKED",
+      "authorization": "not_authorized",
+      "technical_block": true,
+      "block_reasons": [
+        {
+          "code": "tokenizer_unverified",
+          "evidence": "tokenizer.json was not downloaded and its revision is null."
+        },
+        {
+          "code": "real_preflight_missing",
+          "evidence": "No real tokenizer has measured the shell-plus-document prompts."
+        },
+        {
+          "code": "truncation_guard_absent",
+          "evidence": "No conditioning adapter currently guarantees that over-long prompts are blocked instead of truncated."
+        },
+        {
+          "code": "output_budget_unfrozen",
+          "evidence": "max_new_tokens for the conditioning campaign is not frozen."
+        },
+        {
+          "code": "channel_separator_unverified",
+          "evidence": "enable_thinking false still inserts an empty thought channel. parse_response has not been shown to return only the answer channel."
+        },
+        {
+          "code": "transformers_4_57_6_incompatible",
+          "evidence": "The pinned inference environment has no gemma4_unified class."
+        },
+        {
+          "code": "execution_not_approved",
+          "evidence": "Appearing in this plan does not authorize a campaign."
+        },
+        {
+          "code": "NOT_EXECUTABLE",
+          "evidence": "C3-NL is not an executable campaign arm."
+        },
+        {
+          "code": "does_not_authorize_C3",
+          "evidence": "C3-NL does not authorize C3."
+        }
+      ],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "one_retry_for_infrastructure_or_timeout_only_after_authorization_and_identical_across_conditions",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": true,
+      "real_preflight_done": false,
+      "requires_no_truncation": true,
+      "requires_frozen_output_budget": true,
+      "output_budget_frozen": false,
+      "requires_channel_separator": true,
+      "id": "GEMMA-C3-NL"
+    },
+    {
+      "program": "CONDITIONING",
+      "system_id": "gemma4_12b_it",
+      "dataset_id": "teresia_hohfeld",
+      "split": "canonical_annotations",
+      "condition": null,
+      "protocol_id": "CONDITIONING_ROBUSTNESS",
+      "summary": "Future three-estimand evaluation for the robustness backbone. No score is produced here.",
+      "inputs": [],
+      "outputs": [],
+      "dependencies": [
+        "GEMMA-C0",
+        "GEMMA-C1",
+        "GEMMA-C2",
+        "GEMMA-C3",
+        "GEMMA-C3-NL"
+      ],
+      "resource_profile_id": "cpu-acquire",
+      "resources": {
+        "process_ram": "8G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "not_versioned",
+        "path": null,
+        "invoked_by": null
+      },
+      "gates": [
+        "do not pool this protocol with CONDITIONING_PRIMARY"
+      ],
+      "acceptance_criteria": [
+        "no leaderboard row is written by this registry"
+      ],
+      "preparation_status": "BLOCKED",
+      "authorization": "not_authorized",
+      "technical_block": true,
+      "block_reasons": [
+        {
+          "code": "tokenizer_unverified",
+          "evidence": "tokenizer.json was not downloaded and its revision is null."
+        },
+        {
+          "code": "real_preflight_missing",
+          "evidence": "No real tokenizer has measured the shell-plus-document prompts."
+        },
+        {
+          "code": "truncation_guard_absent",
+          "evidence": "No conditioning adapter currently guarantees that over-long prompts are blocked instead of truncated."
+        },
+        {
+          "code": "output_budget_unfrozen",
+          "evidence": "max_new_tokens for the conditioning campaign is not frozen."
+        },
+        {
+          "code": "channel_separator_unverified",
+          "evidence": "enable_thinking false still inserts an empty thought channel. parse_response has not been shown to return only the answer channel."
+        },
+        {
+          "code": "transformers_4_57_6_incompatible",
+          "evidence": "The pinned inference environment has no gemma4_unified class."
+        },
+        {
+          "code": "execution_not_approved",
+          "evidence": "Appearing in this plan does not authorize a campaign."
+        },
+        {
+          "code": "PARTIAL",
+          "evidence": "C2 readiness remains PARTIAL."
+        },
+        {
+          "code": "NOT_READY",
+          "evidence": "C3 readiness remains NOT_READY."
+        },
+        {
+          "code": "NOT_EXECUTABLE",
+          "evidence": "C3 remains NOT_EXECUTABLE."
+        },
+        {
+          "code": "NOT_EXECUTABLE",
+          "evidence": "C3-NL is not an executable campaign arm."
+        },
+        {
+          "code": "does_not_authorize_C3",
+          "evidence": "C3-NL does not authorize C3."
+        }
+      ],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": {
+        "protocol_id": "CONDITIONING_ROBUSTNESS",
+        "publish": false,
+        "estimands": [
+          "conservative_operational_f1",
+          "f1_conditional_on_completed_generation",
+          "paired_secondary_f1"
+        ]
+      },
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": "scientific_comparable",
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": true,
+      "real_preflight_done": false,
+      "requires_no_truncation": true,
+      "requires_frozen_output_budget": true,
+      "output_budget_frozen": false,
+      "requires_channel_separator": true,
+      "id": "GEMMA-EVAL"
+    }
+  ]
+}
