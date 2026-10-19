@@ -1,7 +1,12 @@
 """Versioned campaign records for the controlled experiment.
 
-Scientific identity excludes local paths, durations, and timestamps. Those
-belong in operational metadata and must not change a campaign identifier.
+``exp3b1-1`` replaces ``exp3a-1``. Scientific configuration identity still
+excludes local paths, durations, and timestamps. Implementation content now
+has its own fingerprint, and P0 scores are read only from per-condition files
+produced by ``export_evaluation``. A pooled five-condition file is not a
+contrast and is not written as a scoring source.
+
+Harness incidents are not principal states of the protocol.
 """
 
 from __future__ import annotations
@@ -12,7 +17,14 @@ import json
 from typing import Any, Mapping
 
 
-CAMPAIGN_CONTRACT_VERSION = "exp3a-1"
+CAMPAIGN_CONTRACT_VERSION = "exp3b1-1"
+PREVIOUS_CAMPAIGN_CONTRACT_VERSION = "exp3a-1"
+STATUS_PUBLISHABLE = "operationally_complete_publishable"
+STATUS_INCOMPLETE = "incomplete_external_or_interrupted"
+STATUS_PUBLICATION_BLOCKED = "finished_publication_blocked"
+STATUS_ABORTED_CONTRACT = "aborted_contract"
+STATUS_ABORTED_CONFIGURATION = "aborted_configuration"
+STATUS_IN_PROGRESS = "in_progress"
 SYNTHETIC_CONTRACT_TEST = "SYNTHETIC_CONTRACT_TEST"
 SHELL_ID_REQUIRED = "common-instruction-shell-v2"
 REQUIRED_CONDITIONS = ("C0", "C1", "C2", "C3", "C3-NL")
@@ -41,11 +53,36 @@ class PreflightNotAssessed(CampaignError):
     """No verifiable tokenizer or context capacity was available."""
 
 
+class ExternalInfrastructureError(Exception):
+    """Explicit external failure. Retryable. This is not an OSError subclass."""
+
+
+class HarnessPairError(Exception):
+    """The harness failed on one pair. This is not a model failure."""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        prompt_sha256: str | None = None,
+        input_sha256: str | None = None,
+        slot_sha256: str | None = None,
+        shell_sha256: str | None = None,
+    ) -> None:
+        self.code = code
+        self.prompt_sha256 = prompt_sha256
+        self.input_sha256 = input_sha256
+        self.slot_sha256 = slot_sha256
+        self.shell_sha256 = shell_sha256
+        super().__init__(message)
+
+
 class ScriptMissing(LookupError):
     """The synthetic extractor has no script for this attempt."""
 
 
-class SimulatedInfrastructureError(RuntimeError):
+class SimulatedInfrastructureError(ExternalInfrastructureError):
     """Synthetic stand-in for a transient external failure. Not a model error."""
 
 
@@ -84,7 +121,9 @@ class AttemptRecord:
     document_id: str
     example_id: str
     attempt_index: int | None
-    principal_state: str
+    principal_state: str | None
+    harness_incident: str | None = None
+    harness_message: str | None = None
     prompt_sha256: str | None = None
     slot_sha256: str | None = None
     shell_sha256: str | None = None
@@ -111,6 +150,8 @@ class AttemptRecord:
                 "example_id": self.example_id,
                 "exception_message": self.exception_message,
                 "exception_type": self.exception_type,
+                "harness_incident": self.harness_incident,
+                "harness_message": self.harness_message,
                 "input_sha256": self.input_sha256,
                 "model_output": self.model_output,
                 "parse_issues": [dict(item) for item in self.parse_issues] or None,

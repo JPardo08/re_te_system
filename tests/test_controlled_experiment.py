@@ -29,15 +29,27 @@ from re_te_system.controlled_experiment.campaign import (
     render_controlled_prompt,
     run_controlled_campaign,
 )
+from re_te_system.contracts import ExtractionContext
 from re_te_system.controlled_experiment.contracts import (
     REAL_C3_CONDITIONS,
     SYNTHETIC_CONTRACT_TEST,
     CampaignError,
+    ExternalInfrastructureError,
     PreflightNotAssessed,
     RealC3CampaignRejected,
+    SimulatedInfrastructureError,
     sha256_text,
 )
-from re_te_system.controlled_experiment.dependencies import repository_root_from_package
+from re_te_system.controlled_experiment.dependencies import (
+    SYSTEM_REPO,
+    repository_root_from_package,
+)
+from re_te_system.controlled_experiment.fingerprint import (
+    collect_implementation_parts,
+    implementation_fingerprint,
+)
+from re_te_system.controlled_experiment.reporting import contract_violation, evaluation_summary
+from re_te_system.runner.run import export_evaluation
 from re_te_system.controlled_experiment.preflight import PreflightRequest, assess_preflight
 from re_te_system.controlled_experiment.synthetic import (
     SYNTHETIC_COUNTER_ID,
@@ -248,18 +260,31 @@ def test_context_block_does_not_call_or_retry(tmp_path: Path) -> None:
     assert attempt["preflight"]["fits"] is False
     assert attempt["prompt_sha256"] == sha256_text(render_condition("C0", ALPHA))
     assert result["prediction_records"] == []
-    assert (tmp_path / "evaluation_predictions.jsonl").read_text(encoding="utf-8") == ""
+    assert (tmp_path / "conditions" / "C0" / "evaluation_predictions.jsonl").read_text(encoding="utf-8") == ""
 
 
-def test_unassessed_preflight_is_not_a_pass() -> None:
+def test_unassessed_preflight_is_not_a_pass(tmp_path: Path) -> None:
     extractor = _extractor({("*", "doc-alpha", 1): _output(TWO_LINES)})
     try:
-        run_controlled_campaign(_config(extractor, tokenizer_id=None))
+        run_controlled_campaign(_config(extractor, tokenizer_id=None, output_dir=tmp_path))
     except PreflightNotAssessed:
         pass
     else:
         raise AssertionError("missing tokenizer must not pass preflight")
     assert extractor.calls == []
+    states = [
+        json.loads(line)
+        for line in (tmp_path / "document_states.jsonl").read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    assert len(states) == 1
+    assert states[0]["harness_incident"] == "not_started_configuration_abort"
+    assert "principal_state" not in states[0]
+    status = json.loads((tmp_path / "campaign_status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "aborted_configuration"
+    summary = json.loads((tmp_path / "synthetic_evaluation_summary.json").read_text(encoding="utf-8"))
+    assert summary["estimands"]["conservative"]["micro"] is None
+    assert summary["experimental_f1"] is False
 
 
 def test_generation_states_diagnostics_and_retries(tmp_path: Path) -> None:
@@ -346,7 +371,9 @@ def test_generation_states_diagnostics_and_retries(tmp_path: Path) -> None:
     assert "Alpha\tsupplies\tBeta\n" == infra_attempts[1]["model_output"]
     exported_ids = [
         json.loads(line)["document_id"]
-        for line in (tmp_path / "evaluation_predictions.jsonl").read_text(encoding="utf-8").splitlines()
+        for line in (tmp_path / "conditions" / "C0" / "evaluation_predictions.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
         if line
     ]
     assert exported_ids.count("doc-infra") == 1
@@ -357,6 +384,7 @@ def test_generation_states_diagnostics_and_retries(tmp_path: Path) -> None:
     assert coverage["denominator"] == len(cohort)
     assert sum(coverage["principal_states"].values()) == len(cohort)
     assert coverage["not_attempted"] == 1
+    assert coverage["also_observed"] == 3
 
 
 def test_tsv_export_and_synthetic_p0(tmp_path: Path) -> None:
@@ -407,10 +435,8 @@ def test_tsv_export_and_synthetic_p0(tmp_path: Path) -> None:
             output_dir=tmp_path,
         )
     )
-    rows = [
-        json.loads(line)
-        for line in (tmp_path / "evaluation_predictions.jsonl").read_text(encoding="utf-8").splitlines()
-    ]
+    export_path = tmp_path / "conditions" / "C0" / "evaluation_predictions.jsonl"
+    rows = [json.loads(line) for line in export_path.read_text(encoding="utf-8").splitlines() if line]
     by_doc: dict[str, list[dict]] = {}
     for row in rows:
         by_doc.setdefault(row["document_id"], []).append(row)
@@ -426,11 +452,13 @@ def test_tsv_export_and_synthetic_p0(tmp_path: Path) -> None:
     summary = result["evaluation_summary"]
     assert summary["experimental_f1"] is False
     assert summary["result_role"] == "synthetic_contract_test_not_experimental_f1"
-    assert summary["counts"]["gold_eligible"] == 7
-    assert summary["counts"]["gold_eligible_occurrences"] == 8
-    assert summary["counts"]["tp"] == 6
-    assert summary["counts"]["fp"] == 2
-    assert summary["counts"]["fn"] == 2
+    scored = summary["estimands"]["conservative"]["conditions"]["C0"]
+    assert scored["scored_row_ids"] == [row["id"] for row in rows]
+    assert scored["counts"]["gold_eligible"] == 7
+    assert scored["counts"]["gold_eligible_occurrences"] == 8
+    assert scored["counts"]["tp"] == 6
+    assert scored["counts"]["fp"] == 2
+    assert scored["counts"]["fn"] == 2
 
 
 def test_same_script_across_conditions_and_stable_identity(tmp_path: Path) -> None:
@@ -471,24 +499,33 @@ def test_same_script_across_conditions_and_stable_identity(tmp_path: Path) -> No
     )
     assert changed_budget["scientific_id"] != first["scientific_id"]
     identity = first["manifest"]["identity"]
-    assert identity["repositories"]["re_te_system"]["commit_identifies_tree"] is False
-    assert identity["repositories"]["re_te_system"]["head"] == "89cc7fed7399ff22bfb29b4b6c3ff2a18828c08a"
-    assert identity["repositories"]["re_te_benchmark"]["head"] == "005cb78a117216e0f2d4ab221c6e1bc7e8baf16f"
-    assert identity["repositories"]["re_te_benchmark"]["commit_identifies_tree"] is True
-    assert identity["repositories"]["re_te_evaluation"]["head"] == "11bc1b99499061e7b5bbfdab1a6103c62a393c58"
-    assert identity["freeze_status"] == "incomplete"
+    operational = first["manifest"]["operational"]
+    assert "repositories" not in identity
+    assert "implementation_fingerprint" not in identity
+    assert operational["repositories"]["re_te_system"]["commit_identifies_tree"] is False
+    assert operational["repositories"]["re_te_system"]["dirty"] is True
+    assert operational["repositories"]["re_te_system"]["head"] == "4996f32d809084a7c6b7e19f5e2649b523b24641"
+    assert operational["repositories"]["re_te_benchmark"]["head"] == "005cb78a117216e0f2d4ab221c6e1bc7e8baf16f"
+    assert operational["repositories"]["re_te_benchmark"]["commit_identifies_tree"] is True
+    assert operational["repositories"]["re_te_evaluation"]["head"] == "11bc1b99499061e7b5bbfdab1a6103c62a393c58"
+    assert operational["repositories"]["re_te_evaluation"]["commit_identifies_tree"] is True
+    assert operational["freeze_status"] == "incomplete"
+    assert operational["created_at"] is None
     assert identity["shell"]["sha256"] == sha256_text(shell_template())
+    assert first["implementation_fingerprint"] == second["implementation_fingerprint"]
     assert "duration" in first["manifest"]["identity_excludes"]
     files = {
         "campaign_manifest.json",
         "attempts.jsonl",
         "document_states.jsonl",
         "predictions.jsonl",
-        "evaluation_predictions.jsonl",
         "coverage.json",
         "synthetic_evaluation_summary.json",
+        "campaign_status.json",
     }
     assert files <= {path.name for path in (tmp_path / "first").iterdir()}
+    assert (tmp_path / "first" / "conditions" / "C0" / "evaluation_predictions.jsonl").is_file()
+    assert not (tmp_path / "first" / "evaluation_predictions.jsonl").exists()
     assert json.loads((tmp_path / "first" / "coverage.json").read_text(encoding="utf-8"))["denominator_meaning"] == (
         "cohort_size_not_f1_denominator"
     )
@@ -500,14 +537,374 @@ def test_campaign_does_not_call_the_baseline_pipeline() -> None:
     assert "run_pipeline(" not in text
 
 
-def test_contract_abort_withholds_score() -> None:
-    from re_te_system.controlled_experiment.reporting import evaluation_summary
-
+def test_contract_abort_withholds_score(tmp_path: Path) -> None:
+    predictions = tmp_path / "predictions.jsonl"
+    exported = tmp_path / "evaluation_predictions.jsonl"
+    predictions.write_text(
+        json.dumps(
+            {
+                "document_id": "doc-alpha",
+                "example_id": "doc-alpha",
+                "run_id": "synthetic-run",
+                "validated": {
+                    "triples": [
+                        {
+                            "subject": " ",
+                            "relation": "supplies",
+                            "object": "Beta",
+                            "segment_id": None,
+                        }
+                    ]
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    export_evaluation(predictions, exported)
+    rows = [json.loads(line) for line in exported.read_text(encoding="utf-8").splitlines() if line]
+    assert contract_violation(rows) is not None
     summary = evaluation_summary(
         (_eligible("doc-alpha", "Alpha", "supplies", "Beta", "syn"),),
-        [{"document_id": "doc-alpha", "subject": " ", "relation": "supplies", "object": "Beta"}],
+        rows,
         True,
     )
     assert summary["publication"] == "withheld_evaluation_contract_abort"
     assert summary["micro"] is None
     assert summary["experimental_f1"] is False
+
+
+class _RaisingExtractor(ScriptedTsvExtractor):
+    def __init__(self, error: BaseException) -> None:
+        super().__init__({})
+        self.error = error
+
+    def extract(self, text: str, context: ExtractionContext):
+        self.calls.append((context.condition, context.document_id, int(context.input_id), text))
+        raise self.error
+
+
+def test_second_document_failure_keeps_the_first(tmp_path: Path) -> None:
+    def count_tokens(prompt: str) -> int:
+        if "STOPHERE" in prompt:
+            raise ValueError("counter failed on purpose")
+        return len(prompt)
+
+    cohort = (
+        _document("doc-kept", "Alpha supplies Beta."),
+        _document("doc-stop", "STOPHERE supplies Beta."),
+        _document("doc-later", "Gamma supplies Beta."),
+    )
+    result = run_controlled_campaign(
+        _config(
+            _extractor(
+                {
+                    ("*", "doc-kept", 1): _output("Alpha\tsupplies\tBeta\n"),
+                    ("*", "doc-stop", 1): _output("SHOULD\tNOT\tRUN\n"),
+                    ("*", "doc-later", 1): _output("Gamma\tsupplies\tBeta\n"),
+                }
+            ),
+            cohort=cohort,
+            count_tokens=count_tokens,
+            synthetic_gold=(
+                _eligible("doc-kept", "Alpha", "supplies", "Beta", "syn-kept"),
+                _eligible("doc-stop", "STOPHERE", "supplies", "Beta", "syn-stop"),
+                _eligible("doc-later", "Gamma", "supplies", "Beta", "syn-later"),
+            ),
+            output_dir=tmp_path,
+        )
+    )
+    states = _states(result, "C0")
+    assert states["doc-kept"]["principal_state"] == "completed"
+    assert states["doc-stop"]["harness_incident"] == "token_counter_error"
+    assert "principal_state" not in states["doc-stop"]
+    assert states["doc-later"]["harness_incident"] == "not_reached_after_interruption"
+    assert result["campaign_status"]["status"] == "incomplete_external_or_interrupted"
+    assert result["evaluation_summary"]["estimands"]["conservative"]["conditions"]["C0"]["micro"] is None
+    assert "doc-stop" not in {row["document_id"] for row in result["prediction_records"]}
+    stored = [
+        json.loads(line)
+        for line in (tmp_path / "attempts.jsonl").read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    assert [row["document_id"] for row in stored] == [row["document_id"] for row in result["attempts"]]
+    assert sum(1 for row in stored if row["document_id"] == "doc-kept") == 1
+    assert stored[0]["model_output"] == "Alpha\tsupplies\tBeta\n"
+    assert "SHOULD" not in (tmp_path / "attempts.jsonl").read_text(encoding="utf-8")
+    exported = (tmp_path / "conditions" / "C0" / "evaluation_predictions.jsonl").read_text(encoding="utf-8")
+    assert "doc-kept" in exported
+    assert "doc-stop" not in exported
+    assert "doc-later" not in exported
+
+
+def test_missing_script_is_a_harness_incident(tmp_path: Path) -> None:
+    extractor = _extractor({("*", "doc-kept", 1): _output("Alpha\tsupplies\tBeta\n")})
+    cohort = (
+        _document("doc-kept", "Alpha supplies Beta."),
+        _document("doc-gap", "Alpha has no script."),
+        _document("doc-later", "Gamma supplies Beta."),
+    )
+    result = run_controlled_campaign(
+        _config(
+            extractor,
+            cohort=cohort,
+            synthetic_gold=(
+                _eligible("doc-kept", "Alpha", "supplies", "Beta", "syn-kept"),
+                _eligible("doc-gap", "Alpha", "supplies", "Beta", "syn-gap"),
+            ),
+            output_dir=tmp_path,
+        )
+    )
+    states = _states(result, "C0")
+    assert states["doc-kept"]["principal_state"] == "completed"
+    assert states["doc-gap"]["harness_incident"] == "script_missing"
+    assert states["doc-gap"].get("principal_state") != "model_execution_error"
+    assert states["doc-later"]["harness_incident"] == "not_reached_after_interruption"
+    assert [call[1] for call in extractor.calls] == ["doc-kept", "doc-gap"]
+    assert result["campaign_status"]["status"] == "incomplete_external_or_interrupted"
+    assert result["evaluation_summary"]["estimands"]["conservative"]["conditions"]["C0"]["micro"] is None
+    assert "doc-kept" in (tmp_path / "document_states.jsonl").read_text(encoding="utf-8")
+
+
+def test_infrastructure_and_timeout_retry_once_but_model_errors_do_not(tmp_path: Path) -> None:
+    assert issubclass(SimulatedInfrastructureError, ExternalInfrastructureError)
+    assert not issubclass(SimulatedInfrastructureError, OSError)
+    cohort = (
+        _document("doc-socket", "Alpha opens a socket."),
+        _document("doc-os", "Alpha touches a file."),
+    )
+    socket_extractor = _RaisingExtractor(ConnectionError("connection refused"))
+    socket_result = run_controlled_campaign(
+        _config(socket_extractor, cohort=(_document("doc-socket", "Alpha opens a socket."),), output_dir=tmp_path / "socket")
+    )
+    assert _states(socket_result, "C0")["doc-socket"]["principal_state"] == "model_execution_error"
+    assert _states(socket_result, "C0")["doc-socket"]["attempt_count"] == 1
+    assert socket_extractor.calls and len(socket_extractor.calls) == 1
+    os_extractor = _RaisingExtractor(OSError("internal buffer"))
+    os_result = run_controlled_campaign(
+        _config(os_extractor, cohort=(_document("doc-os", "Alpha touches a file."),), output_dir=tmp_path / "os")
+    )
+    assert _states(os_result, "C0")["doc-os"]["principal_state"] == "model_execution_error"
+    assert _states(os_result, "C0")["doc-os"]["attempt_count"] == 1
+    assert "also_observed" not in _states(os_result, "C0")["doc-os"]
+    assert len(os_extractor.calls) == 1
+    assert cohort[0].document_id == "doc-socket"
+
+
+def test_truncated_input_is_traced_and_not_scored(tmp_path: Path) -> None:
+    extractor = _extractor(
+        {
+            ("*", "doc-cut", 1): _output("Alpha\tsupplies\tBeta\n", truncated_input=True),
+            ("*", "doc-cut", 2): _output("SHOULD\tNOT\tRETRY\n"),
+        }
+    )
+    result = run_controlled_campaign(
+        _config(
+            extractor,
+            cohort=(_document("doc-cut", "Alpha must not lose its prompt."),),
+            synthetic_gold=(_eligible("doc-cut", "Alpha", "supplies", "Beta", "syn-cut"),),
+            output_dir=tmp_path,
+        )
+    )
+    state = _states(result, "C0")["doc-cut"]
+    assert state["principal_state"] == "completed"
+    assert state["attempt_count"] == 1
+    assert state["diagnostics"]["truncated_input"] is True
+    assert len(extractor.calls) == 1
+    attempt = result["attempts"][0]
+    assert attempt["model_output"] == "Alpha\tsupplies\tBeta\n"
+    withheld = [
+        json.loads(line)
+        for line in (tmp_path / "conditions" / "C0" / "withheld_predictions.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line
+    ]
+    assert withheld[0]["validated"]["triples"][0]["object"] == "Beta"
+    exported = (tmp_path / "conditions" / "C0" / "evaluation_predictions.jsonl").read_text(encoding="utf-8")
+    assert exported == ""
+    assert result["campaign_status"]["status"] == "finished_publication_blocked"
+    assert result["campaign_status"]["publishable_under_protocol"] is False
+    for name in ("conservative", "conditional"):
+        assert result["evaluation_summary"]["estimands"][name]["conditions"]["C0"]["micro"] is None
+    assert result["evaluation_summary"]["estimands"]["paired"]["publication"].startswith("withheld")
+    assert result["evaluation_summary"]["estimands"]["conditional"]["conflict_with_protocol"]
+    assert result["coverage"]["conditions"]["C0"]["truncated_inputs"] == 1
+    assert result["evaluation_summary"]["experimental_f1"] is False
+    assert result["manifest"]["operational"]["input_truncation_attestation"] == "not_verified_no_backbone_adapter"
+
+
+def test_output_truncation_keeps_a_partial_parse(tmp_path: Path) -> None:
+    result = run_controlled_campaign(
+        _config(
+            _extractor(
+                {
+                    ("*", "doc-partial", 1): _output(
+                        "Alpha\tsupplies\tBeta\nnot a triple\n",
+                        output_reached_limit=True,
+                    )
+                }
+            ),
+            cohort=(_document("doc-partial", "Alpha supplies Beta and then fails."),),
+            synthetic_gold=(_eligible("doc-partial", "Alpha", "supplies", "Beta", "syn-partial"),),
+            output_dir=tmp_path,
+        )
+    )
+    diagnostics = _states(result, "C0")["doc-partial"]["diagnostics"]
+    assert diagnostics["output_truncated"] is True
+    assert diagnostics["partially_malformed"] is True
+    assert "truncated_input" not in diagnostics
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "conditions" / "C0" / "evaluation_predictions.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line
+    ]
+    assert [(row["subject"], row["relation"], row["object"]) for row in rows] == [("Alpha", "supplies", "Beta")]
+    coverage = result["coverage"]["conditions"]["C0"]
+    assert coverage["invalid_lines"] == 1
+    assert coverage["parsed_triples"] == 1
+    assert coverage["triples_exported_to_p0"] == 1
+    scored = result["evaluation_summary"]["estimands"]["conservative"]["conditions"]["C0"]
+    assert scored["counts"]["tp"] == 1
+    assert scored["counts"]["fp"] == 0
+    assert scored["counts"]["fn"] == 0
+    assert result["campaign_status"]["status"] == "operationally_complete_publishable"
+
+
+def test_estimands_are_not_interchangeable(tmp_path: Path) -> None:
+    cohort = (
+        _document("doc-a", "Alpha supplies Beta."),
+        _document("doc-b", "Alpha supplies Gamma."),
+    )
+    result = run_controlled_campaign(
+        _config(
+            _extractor(
+                {
+                    ("C0", "doc-a", 1): _output("Alpha\tsupplies\tBeta\n"),
+                    ("C0", "doc-b", 1): ScriptedTurn("model_error", message="closed"),
+                    ("C1", "doc-a", 1): _output("Alpha\tsupplies\tBeta\n"),
+                    ("C1", "doc-b", 1): _output("Alpha\tsupplies\tGamma\n"),
+                }
+            ),
+            cohort=cohort,
+            conditions=("C0", "C1"),
+            synthetic_gold=(
+                _eligible("doc-a", "Alpha", "supplies", "Beta", "syn-a"),
+                _eligible("doc-b", "Alpha", "supplies", "Gamma", "syn-b"),
+            ),
+            output_dir=tmp_path,
+        )
+    )
+    summary = result["evaluation_summary"]
+    conservative = summary["estimands"]["conservative"]["conditions"]
+    conditional = summary["estimands"]["conditional"]["conditions"]
+    paired = summary["estimands"]["paired"]
+    assert conservative["C0"]["micro"]["f1"] != conditional["C0"]["micro"]["f1"]
+    assert conditional["C0"]["document_ids"] == ["doc-a"]
+    assert conditional["C0"]["not_the_cohort"] is True
+    assert conditional["C0"]["counts"]["tp"] == 1
+    assert conditional["C0"]["counts"]["fn"] == 0
+    assert conservative["C0"]["counts"]["fn"] == 1
+    assert conservative["C1"]["micro"]["f1"] == 1.0
+    assert paired["document_ids"] == ["doc-a"]
+    assert paired["exclusions"][0]["document_id"] == "doc-b"
+    assert paired["not_the_cohort"] is True
+    assert paired["conditions"]["C0"]["counts"]["fn"] == 0
+    assert summary["experimental_f1"] is False
+    assert result["campaign_status"]["status"] == "operationally_complete_publishable"
+    c0_rows = [
+        json.loads(line)["id"]
+        for line in (tmp_path / "conditions" / "C0" / "evaluation_predictions.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line
+    ]
+    assert conservative["C0"]["scored_row_ids"] == c0_rows
+    assert all("condition" not in json.loads(line) for line in (tmp_path / "conditions" / "C0" / "evaluation_predictions.jsonl").read_text(encoding="utf-8").splitlines() if line)
+
+
+def test_context_block_remains_visible_in_the_paired_exclusion(tmp_path: Path) -> None:
+    text = "Alpha supplies Beta."
+    reserved = 8
+    limit = len(render_condition("C0", text)) + reserved
+    assert len(render_condition("C1", text)) + reserved > limit
+    result = run_controlled_campaign(
+        _config(
+            _extractor({("*", "doc-alpha", 1): _output("Alpha\tsupplies\tBeta\n")}),
+            cohort=(_document("doc-alpha", text),),
+            conditions=("C0", "C1"),
+            effective_context_limit=limit,
+            reserved_output_tokens=reserved,
+            synthetic_gold=(_eligible("doc-alpha", "Alpha", "supplies", "Beta", "syn"),),
+            output_dir=tmp_path,
+        )
+    )
+    assert _states(result, "C0")["doc-alpha"]["principal_state"] == "completed"
+    assert _states(result, "C1")["doc-alpha"]["principal_state"] == "context_blocked"
+    paired = result["evaluation_summary"]["estimands"]["paired"]
+    assert paired["document_ids"] == []
+    assert paired["publication"] == "withheld_empty_intersection"
+    assert "context_blocked" in paired["exclusions"][0]["reasons"][0]
+    assert result["evaluation_summary"]["estimands"]["conservative"]["conditions"]["C1"]["micro"]["f1"] == 0.0
+    assert result["evaluation_summary"]["estimands"]["conservative"]["conditions"]["C0"]["micro"]["f1"] == 1.0
+    assert result["campaign_status"]["status"] == "operationally_complete_publishable"
+
+
+def test_fingerprint_tracks_parser_bytes_and_ignores_directory(tmp_path: Path) -> None:
+    benchmark = repository_root_from_package("re_te_benchmark")
+    evaluation = repository_root_from_package("re_te_evaluation")
+    assert benchmark is not None and evaluation is not None
+    parts = collect_implementation_parts(
+        system_root=SYSTEM_REPO,
+        benchmark_root=benchmark,
+        evaluation_root=evaluation,
+        shell_text=shell_template(),
+        slots={condition: conditioning_for(condition) for condition in ("C0",)},
+        protocol_text=(benchmark / "docs" / "CONTROLLED_EXPERIMENT_PROTOCOL.md").read_text(encoding="utf-8"),
+    )
+    repositories = {"re_te_system": {"head": "abc", "dirty": True, "commit_identifies_tree": False}}
+    original = implementation_fingerprint(parts, repositories)
+    parser_changed = dict(parts)
+    parser_changed["re_te_system/src/re_te_system/parsing/tsv.py"] += "\n# synthetic marker\n"
+    exporter_changed = dict(parts)
+    exporter_changed["re_te_system/src/re_te_system/runner/run.py"] += "\n# synthetic marker\n"
+    assert implementation_fingerprint(parser_changed, repositories) != original
+    assert implementation_fingerprint(exporter_changed, repositories) != original
+    assert "def parse_tsv" in parts["re_te_system/src/re_te_system/parsing/tsv.py"]
+    assert "def export_evaluation" in parts["re_te_system/src/re_te_system/runner/run.py"]
+    assert parts["re_te_benchmark/conditioning/shell-v2-template"] == shell_template()
+    assert all(not key.startswith("/") for key in parts)
+    assert "tests/test_controlled_experiment.py" not in parts
+    moved = implementation_fingerprint(parts, repositories)
+    assert moved == original
+    assert "/Users" not in original
+    first = run_controlled_campaign(
+        _config(_extractor({("*", "doc-alpha", 1): _output(TWO_LINES)}), output_dir=tmp_path / "one")
+    )
+    second = run_controlled_campaign(
+        _config(_extractor({("*", "doc-alpha", 1): _output(TWO_LINES)}), output_dir=tmp_path / "two")
+    )
+    assert first["scientific_id"] == second["scientific_id"]
+    assert first["implementation_fingerprint"] == second["implementation_fingerprint"]
+    assert first["manifest"]["operational"]["output_dir"] != second["manifest"]["operational"]["output_dir"]
+
+
+def test_disk_error_propagates(tmp_path: Path, monkeypatch) -> None:
+    def fail_write(path: Path, text: str) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(
+        "re_te_system.controlled_experiment.persistence.atomic_write_text",
+        fail_write,
+    )
+    try:
+        run_controlled_campaign(
+            _config(_extractor({("*", "doc-alpha", 1): _output(TWO_LINES)}), output_dir=tmp_path)
+        )
+    except OSError as exc:
+        assert "disk full" in str(exc)
+    else:
+        raise AssertionError("a failed checkpoint must not look like a saved campaign")
+    assert not (tmp_path / "synthetic_evaluation_summary.json").exists()

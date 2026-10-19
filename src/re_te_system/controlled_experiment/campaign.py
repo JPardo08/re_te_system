@@ -1,25 +1,21 @@
 """Campaign layer for the controlled C0–C3 protocol.
 
-``run_pipeline`` remains the baseline runner. It windows inputs, turns an
-extractor exception into a prediction record, and has no preflight, so it
-cannot represent the protocol states without changing baseline behavior.
-This module does not call it.
+The baseline runner remains responsible for baseline experiments. This module
+does not call it. The reused pieces are ``parse_tsv``, ``generation_issue``,
+``normalize_triples``, ``validate_structural``, and ``export_evaluation``.
 
-The reused pieces are ``parse_tsv``, ``generation_issue``, ``normalize_triples``,
-``validate_structural``, and ``export_evaluation``. The rendered prompt is
-never split and never shortened. A context block does not call the extractor.
-A model exception is not stored as an empty generation.
-
-EXP.3a accepts only ``SYNTHETIC_CONTRACT_TEST``. That mode may render C3 and
-C3-NL. Any other mode that includes those conditions is rejected. Benchmark
-readiness is observed and not modified. A scripted timeout does not enforce
-a real process limit; that enforcement is pending for EXP.3b.
+EXP.3b.1 still accepts only ``SYNTHETIC_CONTRACT_TEST``. Scores are read from
+per-condition files produced by ``export_evaluation``. A truncated input is
+kept as evidence and is not a publishable observation. A harness failure is
+not recorded as a model failure. Real process timeouts and real tokenizers
+are not implemented.
 """
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import json
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Mapping
@@ -32,19 +28,24 @@ from re_te_system.contracts import (
 )
 from re_te_system.controlled_experiment.contracts import (
     CAMPAIGN_CONTRACT_VERSION,
+    PREVIOUS_CAMPAIGN_CONTRACT_VERSION,
     REAL_C3_CONDITIONS,
     REQUIRED_CONDITIONS,
     RETRYABLE_STATES,
     SHELL_ID_REQUIRED,
+    STATUS_ABORTED_CONFIGURATION,
+    STATUS_ABORTED_CONTRACT,
+    STATUS_IN_PROGRESS,
+    STATUS_INCOMPLETE,
     SYNTHETIC_CONTRACT_TEST,
     AttemptRecord,
     CampaignError,
+    ExternalInfrastructureError,
+    HarnessPairError,
     PreflightNotAssessed,
     RealC3CampaignRejected,
     ScriptMissing,
-    SimulatedInfrastructureError,
     campaign_scientific_id,
-    canonical_json,
     omit_absent,
     sha256_payload,
     sha256_text,
@@ -55,10 +56,19 @@ from re_te_system.controlled_experiment.dependencies import (
     git_revision,
     repository_root_from_package,
 )
+from re_te_system.controlled_experiment.fingerprint import (
+    audit_inventory,
+    collect_implementation_parts,
+    implementation_fingerprint,
+)
+from re_te_system.controlled_experiment.persistence import atomic_write_json, atomic_write_jsonl
 from re_te_system.controlled_experiment.preflight import PreflightRequest, assess_preflight
 from re_te_system.controlled_experiment.reporting import (
+    contract_violation,
     coverage_report,
-    evaluation_summary,
+    decide_campaign_status,
+    estimand_report,
+    read_jsonl,
     write_campaign_files,
 )
 from re_te_system.controlled_experiment.synthetic import ScriptedTsvExtractor
@@ -105,7 +115,7 @@ class CampaignConfig:
 
     def __post_init__(self) -> None:
         if self.do_sample:
-            raise CampaignError("EXP.3a synthetic campaigns do not sample")
+            raise CampaignError("synthetic campaigns do not sample")
         if not self.cohort:
             raise CampaignError("a campaign needs a cohort")
         if len({item.document_id for item in self.cohort}) != len(self.cohort):
@@ -119,6 +129,26 @@ def render_controlled_prompt(condition: str, text: str) -> str:
 
 
 def run_controlled_campaign(config: CampaignConfig) -> dict[str, Any]:
+    if config.output_dir is None:
+        with TemporaryDirectory() as temporary:
+            return _execute(config, Path(temporary))
+    return _execute(config, config.output_dir)
+
+
+def authorize_campaign(mode: str, conditions: tuple[str, ...] | list[str]) -> None:
+    if any(condition not in REQUIRED_CONDITIONS for condition in conditions):
+        raise CampaignError(f"unknown condition in {conditions!r}")
+    if mode == SYNTHETIC_CONTRACT_TEST:
+        return
+    if any(condition in REAL_C3_CONDITIONS for condition in conditions):
+        raise RealC3CampaignRejected(
+            "This synthetic authorization cannot run a real C3 or C3-NL campaign. "
+            "C3 remains NOT_READY and NOT_EXECUTABLE."
+        )
+    raise CampaignError("only SYNTHETIC_CONTRACT_TEST is authorized")
+
+
+def _execute(config: CampaignConfig, output_dir: Path) -> dict[str, Any]:
     authorize_campaign(config.mode, config.conditions)
     shell = _shell()
     if shell.SHELL_ID != SHELL_ID_REQUIRED:
@@ -142,9 +172,403 @@ def run_controlled_campaign(config: CampaignConfig) -> dict[str, Any]:
         "re_te_system": git_revision(SYSTEM_REPO),
     }
     protocol = _protocol_identity(benchmark_root)
-    fingerprint = _relevant_fingerprint(shell_text, protocol.get("sha256"))
+    protocol_text = _protocol_text(benchmark_root)
+    parts = collect_implementation_parts(
+        system_root=SYSTEM_REPO,
+        benchmark_root=benchmark_root,
+        evaluation_root=evaluation_root,
+        shell_text=shell_text,
+        slots=slots,
+        protocol_text=protocol_text,
+    )
+    fingerprint = implementation_fingerprint(parts, revisions)
     freeze_gaps = _freeze_gaps(revisions, protocol, readiness)
-    identity = {
+    identity = _scientific_identity(config, shell, shell_sha, slot_hashes, protocol)
+    scientific_id = campaign_scientific_id(identity)
+    manifest = _manifest(
+        scientific_id,
+        identity,
+        fingerprint,
+        sorted(parts),
+        revisions,
+        locations,
+        readiness,
+        freeze_gaps,
+        output_dir,
+        config.output_dir,
+    )
+    pairs = [(condition, document) for condition in config.conditions for document in config.cohort]
+    attempts: list[AttemptRecord] = []
+    states: list[dict[str, Any]] = []
+    publishable: list[dict[str, Any]] = []
+    withheld: list[dict[str, Any]] = []
+    _checkpoint(output_dir, manifest, attempts, states, _status(STATUS_IN_PROGRESS, scientific_id, []))
+    problem = _configuration_problem(config)
+    if problem is not None:
+        exception_type, message = problem
+        for condition, document in pairs:
+            states.append(
+                _harness_state(
+                    scientific_id,
+                    condition,
+                    document,
+                    "not_started_configuration_abort",
+                    message,
+                )
+            )
+        status = decide_campaign_status(states, contract_abort=False)
+        _checkpoint(output_dir, manifest, attempts, states, status)
+        _write_summary(
+            output_dir,
+            _empty_summary(status["status"], message),
+        )
+        raise exception_type(message)
+    stopped = False
+    for index, (condition, document) in enumerate(pairs):
+        if config.submitted_ids is not None and document.document_id not in config.submitted_ids:
+            attempts.append(
+                AttemptRecord(
+                    condition=condition,
+                    document_id=document.document_id,
+                    example_id=document.resolved_example_id,
+                    attempt_index=None,
+                    principal_state="not_attempted",
+                    input_sha256=sha256_text(document.text),
+                    shell_sha256=shell_sha,
+                    slot_sha256=slot_hashes[condition],
+                    submitted=False,
+                    seed=config.seed,
+                )
+            )
+            states.append(_final_state(scientific_id, condition, document, "not_attempted", (), 0))
+            _checkpoint(output_dir, manifest, attempts, states, _status(STATUS_IN_PROGRESS, scientific_id, []))
+            continue
+        try:
+            pair_attempts, final_state, prediction, keep = _run_pair(
+                config,
+                condition,
+                document,
+                shell_sha,
+                slot_hashes[condition],
+                scientific_id,
+            )
+        except HarnessPairError as exc:
+            attempts.append(_incident_attempt(condition, document, exc))
+            states.append(_harness_state(scientific_id, condition, document, exc.code, str(exc)))
+            _mark_not_reached(pairs[index + 1 :], scientific_id, attempts, states)
+            stopped = True
+            _checkpoint(output_dir, manifest, attempts, states, _status(STATUS_IN_PROGRESS, scientific_id, [exc.code]))
+            break
+        except OSError:
+            raise
+        except Exception as exc:
+            incident = HarnessPairError("unexpected_harness_error", f"{type(exc).__name__}: {exc}")
+            attempts.append(_incident_attempt(condition, document, incident))
+            states.append(
+                _harness_state(scientific_id, condition, document, incident.code, str(incident))
+            )
+            _mark_not_reached(pairs[index + 1 :], scientific_id, attempts, states)
+            stopped = True
+            _checkpoint(
+                output_dir,
+                manifest,
+                attempts,
+                states,
+                _status(STATUS_IN_PROGRESS, scientific_id, [incident.code]),
+            )
+            break
+        else:
+            attempts.extend(pair_attempts)
+            states.append(final_state)
+            if prediction is not None:
+                if keep:
+                    publishable.append(prediction)
+                else:
+                    withheld.append(prediction)
+            _checkpoint(output_dir, manifest, attempts, states, _status(STATUS_IN_PROGRESS, scientific_id, []))
+    return _finish(
+        config,
+        output_dir,
+        manifest,
+        scientific_id,
+        attempts,
+        states,
+        publishable,
+        withheld,
+        fingerprint,
+        stopped,
+    )
+
+
+def _finish(
+    config: CampaignConfig,
+    output_dir: Path,
+    manifest: dict[str, Any],
+    scientific_id: str,
+    attempts: list[AttemptRecord],
+    states: list[dict[str, Any]],
+    publishable: list[dict[str, Any]],
+    withheld: list[dict[str, Any]],
+    fingerprint: str,
+    stopped: bool,
+) -> dict[str, Any]:
+    exported_rows: dict[str, list[dict[str, Any]]] = {}
+    export_sha: dict[str, str] = {}
+    export_counts: dict[str, int] = {}
+    contract_reason = None
+    try:
+        for condition in config.conditions:
+            rows, digest = _export_condition(
+                output_dir,
+                condition,
+                [row for row in publishable if row["condition"] == condition],
+                [row for row in withheld if row["condition"] == condition],
+            )
+            exported_rows[condition] = rows
+            export_sha[condition] = digest
+            export_counts[condition] = len(rows)
+            reason = contract_violation(rows)
+            if reason is not None and contract_reason is None:
+                contract_reason = reason
+    except OSError as exc:
+        try:
+            atomic_write_json(
+                output_dir / "campaign_status.json",
+                _status(STATUS_ABORTED_CONTRACT, scientific_id, ["export_failed", str(exc)]),
+            )
+        except OSError as status_error:
+            raise status_error from exc
+        raise
+    except Exception as exc:
+        contract_reason = f"{type(exc).__name__}: {exc}"
+    if contract_reason is not None:
+        for state in states:
+            if state.get("principal_state") == "completed":
+                diagnostics = dict(state.get("diagnostics") or {})
+                diagnostics["evaluation_contract_abort"] = True
+                state["diagnostics"] = diagnostics
+    status = decide_campaign_status(states, contract_abort=contract_reason is not None)
+    if stopped and status["status"] != STATUS_ABORTED_CONTRACT:
+        status["status"] = STATUS_INCOMPLETE
+        if "interrupted" not in status["blockers"]:
+            status["blockers"].append("interrupted")
+        status["publishable_under_protocol"] = False
+    coverage = coverage_report(
+        config.cohort,
+        config.conditions,
+        states,
+        [item.to_dict() for item in attempts],
+        export_counts,
+    )
+    summary = estimand_report(
+        config.synthetic_gold,
+        states,
+        config.conditions,
+        [item.document_id for item in config.cohort],
+        exported_rows,
+        export_sha,
+        status["status"],
+        contract_reason is not None,
+        contract_reason,
+    )
+    result = {
+        "attempts": [item.to_dict() for item in attempts],
+        "campaign_status": status,
+        "coverage": coverage,
+        "document_states": states,
+        "evaluation_summary": summary,
+        "implementation_fingerprint": fingerprint,
+        "manifest": manifest,
+        "prediction_records": publishable,
+        "scientific_id": scientific_id,
+        "withheld_prediction_records": withheld,
+    }
+    write_campaign_files(output_dir, result)
+    _write_summary(output_dir, summary)
+    return result
+
+
+def _export_condition(
+    output_dir: Path,
+    condition: str,
+    publishable: list[dict[str, Any]],
+    withheld: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], str]:
+    directory = output_dir / "conditions" / condition
+    directory.mkdir(parents=True, exist_ok=True)
+    predictions = directory / "predictions.jsonl"
+    exported = directory / "evaluation_predictions.jsonl"
+    partial = directory / ".evaluation_predictions.jsonl.partial"
+    atomic_write_jsonl(predictions, publishable)
+    atomic_write_jsonl(directory / "withheld_predictions.jsonl", withheld)
+    try:
+        export_evaluation(predictions, partial)
+        os.replace(partial, exported)
+    except Exception:
+        partial.unlink(missing_ok=True)
+        raise
+    rows = read_jsonl(exported)
+    return rows, sha256_text(exported.read_text(encoding="utf-8"))
+
+
+def _run_pair(
+    config: CampaignConfig,
+    condition: str,
+    document: SyntheticDocument,
+    shell_sha: str,
+    slot_sha: str,
+    scientific_id: str,
+) -> tuple[list[AttemptRecord], dict[str, Any], dict[str, Any] | None, bool]:
+    prompt = render_controlled_prompt(condition, document.text)
+    prompt_sha = sha256_text(prompt)
+    input_sha = sha256_text(document.text)
+    attempts: list[AttemptRecord] = []
+    completed_validation = None
+    for attempt_index in (1, 2):
+        try:
+            preflight = assess_preflight(
+                PreflightRequest(
+                    prompt=prompt,
+                    count_tokens=config.count_tokens,
+                    effective_context_limit=config.effective_context_limit,
+                    reserved_output_tokens=config.reserved_output_tokens,
+                    tokenizer_id=config.tokenizer_id,
+                    tokenizer_revision=config.tokenizer_revision,
+                    serialization_id=config.serialization_id,
+                    special_token_allowance=config.special_token_allowance,
+                    counter_id=config.counter_id,
+                )
+            )
+        except ValueError as exc:
+            raise HarnessPairError(
+                "token_counter_error",
+                str(exc),
+                prompt_sha256=prompt_sha,
+                input_sha256=input_sha,
+                slot_sha256=slot_sha,
+                shell_sha256=shell_sha,
+            ) from exc
+        if preflight["assurance"] == "not_assessed":
+            raise HarnessPairError(
+                "preflight_not_assessed",
+                str(preflight["reason"]),
+                prompt_sha256=prompt_sha,
+                input_sha256=input_sha,
+                slot_sha256=slot_sha,
+                shell_sha256=shell_sha,
+            )
+        common = dict(
+            condition=condition,
+            document_id=document.document_id,
+            example_id=document.resolved_example_id,
+            attempt_index=attempt_index,
+            prompt_sha256=prompt_sha,
+            slot_sha256=slot_sha,
+            shell_sha256=shell_sha,
+            input_sha256=input_sha,
+            preflight=preflight,
+            seed=config.seed,
+            reserved_output_tokens=config.reserved_output_tokens,
+            effective_context_limit=config.effective_context_limit,
+        )
+        if preflight["fits"] is not True:
+            attempts.append(AttemptRecord(principal_state="context_blocked", **common))
+            break
+        context = ExtractionContext(str(attempt_index), document.document_id, None, condition)
+        try:
+            raw = config.extractor.extract(prompt, context)
+        except ScriptMissing as exc:
+            raise HarnessPairError(
+                "script_missing",
+                str(exc),
+                prompt_sha256=prompt_sha,
+                input_sha256=input_sha,
+                slot_sha256=slot_sha,
+                shell_sha256=shell_sha,
+            ) from exc
+        except ExternalInfrastructureError as exc:
+            attempts.append(_failure_attempt("external_infrastructure_error", exc, common))
+        except TimeoutError as exc:
+            attempts.append(_failure_attempt("timeout", exc, common))
+        except Exception as exc:
+            attempts.append(_failure_attempt("model_execution_error", exc, common))
+        else:
+            if config.extractor.calls[-1][3] != prompt:
+                raise HarnessPairError(
+                    "prompt_contract_violation",
+                    "extractor received a prompt that is not the rendered shell",
+                    prompt_sha256=prompt_sha,
+                    input_sha256=input_sha,
+                    slot_sha256=slot_sha,
+                    shell_sha256=shell_sha,
+                )
+            attempt, validated = _completed_attempt(raw.model_output, raw.generation_metadata, common)
+            attempts.append(attempt)
+            if attempt.principal_state == "completed":
+                completed_validation = validated
+        if attempts[-1].principal_state not in RETRYABLE_STATES or attempt_index == 2:
+            break
+    final = attempts[-1]
+    earlier = [
+        {"attempt_index": item.attempt_index, "principal_state": item.principal_state}
+        for item in attempts[:-1]
+    ]
+    prediction = None
+    keep = False
+    parsed_triples = None
+    invalid_lines = None
+    if final.principal_state == "completed":
+        if completed_validation is None:
+            raise HarnessPairError("unexpected_harness_error", "completed attempt has no validated triples")
+        invalid_lines = sum(1 for issue in final.parse_issues if issue.get("code") == "UNPARSEABLE_CHUNK")
+        parsed_triples = len(completed_validation.triples)
+        prediction = _prediction_record(scientific_id, condition, document, completed_validation)
+        keep = final.diagnostics.get("truncated_input") is not True
+        if not keep:
+            prediction["withheld_reason"] = "truncated_input"
+    return (
+        attempts,
+        _final_state(
+            scientific_id,
+            condition,
+            document,
+            final.principal_state,
+            earlier,
+            len(attempts),
+            final.diagnostics,
+            parsed_triples,
+            invalid_lines,
+        ),
+        prediction,
+        keep,
+    )
+
+
+def _configuration_problem(config: CampaignConfig) -> tuple[type[Exception], str] | None:
+    missing = []
+    if not config.tokenizer_id:
+        missing.append("tokenizer_id")
+    if config.count_tokens is None or not (config.counter_id or "").strip():
+        missing.append("token_counter")
+    if config.effective_context_limit is None:
+        missing.append("effective_context_limit")
+    if missing:
+        return PreflightNotAssessed, "preflight_not_assessed:" + ",".join(missing)
+    if config.reserved_output_tokens < 0 or config.special_token_allowance < 0:
+        return CampaignError, "token reserves must be non-negative"
+    if config.effective_context_limit is not None and config.effective_context_limit < 0:
+        return CampaignError, "effective_context_limit must be non-negative"
+    return None
+
+
+def _scientific_identity(
+    config: CampaignConfig,
+    shell: Any,
+    shell_sha: str,
+    slot_hashes: Mapping[str, str],
+    protocol: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
         "campaign_contract_version": CAMPAIGN_CONTRACT_VERSION,
         "conditions": list(config.conditions),
         "context_budget": {
@@ -176,269 +600,148 @@ def run_controlled_campaign(config: CampaignConfig) -> dict[str, Any]:
             "revision": config.extractor.model_revision,
             "script_sha256": sha256_payload(_script_identity(config.extractor)),
         },
-        "freeze_status": "incomplete" if freeze_gaps else "content_addressed",
-        "input_truncation_policy": "preflight_block_no_extractor_truncation",
+        "input_truncation_policy": "preflight_block_and_truncated_input_not_publishable",
         "mode": SYNTHETIC_CONTRACT_TEST,
         "prediction_contract_version": PREDICTION_CONTRACT_VERSION,
         "protocol": protocol,
-        "relevant_artifact_fingerprint": fingerprint,
-        "repositories": {
-            name: {
-                "commit_identifies_tree": record["commit_identifies_tree"],
-                "dirty": record["dirty"],
-                "head": record["head"],
-            }
-            for name, record in revisions.items()
-        },
         "serialization_id": config.serialization_id,
         "shell": {"id": shell.SHELL_ID, "sha256": shell_sha},
-        "slot_sha256": slot_hashes,
-        "timeout_enforcement": "simulated_exception_only_pending_exp_3b",
-        "tokenizer": {
-            "id": config.tokenizer_id,
-            "revision": config.tokenizer_revision,
-        },
+        "slot_sha256": dict(slot_hashes),
+        "tokenizer": {"id": config.tokenizer_id, "revision": config.tokenizer_revision},
     }
-    scientific_id = campaign_scientific_id(identity)
-    attempts: list[AttemptRecord] = []
-    states: list[dict[str, Any]] = []
-    prediction_records: list[dict[str, Any]] = []
-    submitted = config.submitted_ids
-    for condition in config.conditions:
-        for document in config.cohort:
-            if submitted is not None and document.document_id not in submitted:
-                attempts.append(
-                    AttemptRecord(
-                        condition=condition,
-                        document_id=document.document_id,
-                        example_id=document.resolved_example_id,
-                        attempt_index=None,
-                        principal_state="not_attempted",
-                        input_sha256=sha256_text(document.text),
-                        shell_sha256=shell_sha,
-                        slot_sha256=slot_hashes[condition],
-                        submitted=False,
-                        seed=config.seed,
-                    )
-                )
-                states.append(
-                    _final_state(
-                        scientific_id,
-                        condition,
-                        document,
-                        "not_attempted",
-                        (),
-                        0,
-                    )
-                )
-                continue
-            pair_attempts, final_state, prediction = _run_pair(
-                config,
+
+
+def _manifest(
+    scientific_id: str,
+    identity: Mapping[str, Any],
+    fingerprint: str,
+    component_labels: list[str],
+    revisions: Mapping[str, Mapping[str, Any]],
+    locations: Mapping[str, Mapping[str, str]],
+    readiness: Mapping[str, Any],
+    freeze_gaps: list[str],
+    output_dir: Path,
+    configured_output: Path | None,
+) -> dict[str, Any]:
+    return {
+        "audit": {"relevant_tests": audit_inventory(SYSTEM_REPO)},
+        "campaign_scientific_id": scientific_id,
+        "contract_compatibility": {
+            "previous": PREVIOUS_CAMPAIGN_CONTRACT_VERSION,
+            "scoring": "conditions/<condition>/evaluation_predictions.jsonl",
+            "version": CAMPAIGN_CONTRACT_VERSION,
+            "exp3a_pooled_file": "not a scoring source and not written",
+        },
+        "identity": dict(identity),
+        "identity_excludes": [
+            "duration",
+            "implementation_fingerprint",
+            "local_paths",
+            "repository_heads",
+            "timestamps",
+        ],
+        "implementation_components": component_labels,
+        "implementation_fingerprint": fingerprint,
+        "observed_readiness": dict(readiness),
+        "operational": {
+            "created_at": None,
+            "dependency_resolution": {name: value["method"] for name, value in locations.items()},
+            "freeze_gaps": freeze_gaps,
+            "freeze_status": "incomplete" if freeze_gaps else "content_addressed",
+            "input_truncation_attestation": "not_verified_no_backbone_adapter",
+            "output_dir": None if configured_output is None else str(output_dir),
+            "repositories": {
+                name: {
+                    "commit_identifies_tree": record["commit_identifies_tree"],
+                    "dirty": record["dirty"],
+                    "head": record["head"],
+                }
+                for name, record in revisions.items()
+            },
+            "timeout_enforcement": "simulated_exception_only_pending_exp_3b",
+        },
+        "readiness_mutated": False,
+    }
+
+
+def _checkpoint(
+    output_dir: Path,
+    manifest: Mapping[str, Any],
+    attempts: list[AttemptRecord],
+    states: list[Mapping[str, Any]],
+    status: Mapping[str, Any],
+) -> None:
+    atomic_write_json(output_dir / "campaign_manifest.json", manifest)
+    atomic_write_jsonl(output_dir / "attempts.jsonl", [item.to_dict() for item in attempts])
+    atomic_write_jsonl(output_dir / "document_states.jsonl", list(states))
+    atomic_write_json(output_dir / "campaign_status.json", status)
+
+
+def _status(name: str, scientific_id: str, blockers: list[str]) -> dict[str, Any]:
+    return {
+        "blockers": blockers,
+        "campaign_scientific_id": scientific_id,
+        "publishable_under_protocol": False,
+        "real_execution_authorized": False,
+        "status": name,
+    }
+
+
+def _mark_not_reached(
+    remaining: list[tuple[str, SyntheticDocument]],
+    scientific_id: str,
+    attempts: list[AttemptRecord],
+    states: list[dict[str, Any]],
+) -> None:
+    for condition, document in remaining:
+        states.append(
+            _harness_state(
+                scientific_id,
                 condition,
                 document,
-                shell_sha,
-                slot_hashes[condition],
-                scientific_id,
+                "not_reached_after_interruption",
+                "not reached after an earlier pair failed",
             )
-            attempts.extend(pair_attempts)
-            states.append(final_state)
-            if prediction is not None:
-                prediction_records.append(prediction)
-    contract_abort = _export_would_abort(prediction_records)
-    if contract_abort:
-        for state in states:
-            if state["principal_state"] == "completed":
-                diagnostics = dict(state.get("diagnostics") or {})
-                diagnostics["evaluation_contract_abort"] = True
-                state["diagnostics"] = diagnostics
-    coverage = coverage_report(config.cohort, config.conditions, states)
-    result = {
-        "attempts": [item.to_dict() for item in attempts],
-        "coverage": coverage,
-        "document_states": states,
-        "freeze_gaps": freeze_gaps,
-        "manifest": {
-            "campaign_scientific_id": scientific_id,
-            "identity": identity,
-            "identity_excludes": ["duration", "local_paths", "timestamps"],
-            "observed_readiness": readiness,
-            "operational": {
-                "created_at": None,
-                "dependency_resolution": {
-                    name: value["method"] for name, value in locations.items()
-                },
-                "output_dir": None if config.output_dir is None else str(config.output_dir),
-            },
-            "readiness_mutated": False,
-        },
-        "prediction_records": prediction_records,
-        "scientific_id": scientific_id,
-    }
-    if config.output_dir is None:
-        with TemporaryDirectory() as temporary:
-            result["evaluation_summary"] = _publish(
-                Path(temporary),
-                result,
-                config.synthetic_gold,
-                contract_abort,
-            )
-    else:
-        result["evaluation_summary"] = _publish(
-            config.output_dir,
-            result,
-            config.synthetic_gold,
-            contract_abort,
         )
-    return result
 
 
-def _publish(
-    output_dir: Path,
-    result: dict[str, Any],
-    gold: tuple[Mapping[str, Any], ...] | None,
-    contract_abort: bool,
-) -> dict[str, Any]:
-    write_campaign_files(output_dir, result)
-    export_evaluation(
-        output_dir / "predictions.jsonl",
-        output_dir / "evaluation_predictions.jsonl",
-    )
-    exported = [
-        json.loads(line)
-        for line in (output_dir / "evaluation_predictions.jsonl").read_text(encoding="utf-8").splitlines()
-        if line
-    ]
-    summary = evaluation_summary(
-        gold,
-        exported,
-        contract_abort,
-        result["prediction_records"],
-    )
-    (output_dir / "synthetic_evaluation_summary.json").write_text(
-        canonical_json(summary) + "\n",
-        encoding="utf-8",
-    )
-    return summary
-
-
-def authorize_campaign(mode: str, conditions: tuple[str, ...] | list[str]) -> None:
-    if any(condition not in REQUIRED_CONDITIONS for condition in conditions):
-        raise CampaignError(f"unknown condition in {conditions!r}")
-    if mode == SYNTHETIC_CONTRACT_TEST:
-        return
-    if any(condition in REAL_C3_CONDITIONS for condition in conditions):
-        raise RealC3CampaignRejected(
-            "This synthetic authorization cannot run a real C3 or C3-NL campaign. "
-            "C3 remains NOT_READY and NOT_EXECUTABLE."
-        )
-    raise CampaignError("EXP.3a only authorizes SYNTHETIC_CONTRACT_TEST")
-
-
-def _run_pair(
-    config: CampaignConfig,
+def _incident_attempt(
     condition: str,
     document: SyntheticDocument,
-    shell_sha: str,
-    slot_sha: str,
-    scientific_id: str,
-) -> tuple[list[AttemptRecord], dict[str, Any], dict[str, Any] | None]:
-    prompt = render_controlled_prompt(condition, document.text)
-    prompt_sha = sha256_text(prompt)
-    input_sha = sha256_text(document.text)
-    attempts: list[AttemptRecord] = []
-    completed_validation = None
-    for attempt_index in (1, 2):
-        preflight = assess_preflight(
-            PreflightRequest(
-                prompt=prompt,
-                count_tokens=config.count_tokens,
-                effective_context_limit=config.effective_context_limit,
-                reserved_output_tokens=config.reserved_output_tokens,
-                tokenizer_id=config.tokenizer_id,
-                tokenizer_revision=config.tokenizer_revision,
-                serialization_id=config.serialization_id,
-                special_token_allowance=config.special_token_allowance,
-                counter_id=config.counter_id,
-            )
-        )
-        if preflight["assurance"] == "not_assessed":
-            raise PreflightNotAssessed(str(preflight["reason"]))
-        common = dict(
-            condition=condition,
-            document_id=document.document_id,
-            example_id=document.resolved_example_id,
-            attempt_index=attempt_index,
-            prompt_sha256=prompt_sha,
-            slot_sha256=slot_sha,
-            shell_sha256=shell_sha,
-            input_sha256=input_sha,
-            preflight=preflight,
-            seed=config.seed,
-            reserved_output_tokens=config.reserved_output_tokens,
-            effective_context_limit=config.effective_context_limit,
-        )
-        if preflight["fits"] is not True:
-            attempts.append(AttemptRecord(principal_state="context_blocked", **common))
-            break
-        context = ExtractionContext(
-            str(attempt_index),
-            document.document_id,
-            None,
-            condition,
-        )
-        try:
-            raw = config.extractor.extract(prompt, context)
-        except ScriptMissing:
-            raise
-        except SimulatedInfrastructureError as exc:
-            attempts.append(
-                _failure_attempt("external_infrastructure_error", exc, common)
-            )
-        except TimeoutError as exc:
-            attempts.append(_failure_attempt("timeout", exc, common))
-        except Exception as exc:
-            attempts.append(_failure_attempt("model_execution_error", exc, common))
-        else:
-            if config.extractor.calls[-1][3] != prompt:
-                raise CampaignError("extractor received a prompt that is not the rendered shell")
-            attempt, validated = _completed_attempt(
-                raw.model_output,
-                raw.generation_metadata,
-                common,
-            )
-            attempts.append(attempt)
-            if attempt.principal_state == "completed":
-                completed_validation = validated
-        if attempts[-1].principal_state not in RETRYABLE_STATES or attempt_index == 2:
-            break
-    final = attempts[-1]
-    earlier = [
-        {"attempt_index": item.attempt_index, "principal_state": item.principal_state}
-        for item in attempts[:-1]
-    ]
-    prediction = None
-    if final.principal_state == "completed":
-        if completed_validation is None:
-            raise CampaignError("completed attempt has no validated triples")
-        prediction = _prediction_record(
-            scientific_id,
-            condition,
-            document,
-            completed_validation,
-        )
-    return (
-        attempts,
-        _final_state(
-            scientific_id,
-            condition,
-            document,
-            final.principal_state,
-            earlier,
-            len(attempts),
-            final.diagnostics,
-        ),
-        prediction,
+    exc: HarnessPairError,
+) -> AttemptRecord:
+    return AttemptRecord(
+        condition=condition,
+        document_id=document.document_id,
+        example_id=document.resolved_example_id,
+        attempt_index=None,
+        principal_state=None,
+        harness_incident=exc.code,
+        harness_message=str(exc),
+        prompt_sha256=exc.prompt_sha256,
+        input_sha256=exc.input_sha256,
+        slot_sha256=exc.slot_sha256,
+        shell_sha256=exc.shell_sha256,
+        submitted=True,
     )
+
+
+def _harness_state(
+    scientific_id: str,
+    condition: str,
+    document: SyntheticDocument,
+    code: str,
+    message: str,
+) -> dict[str, Any]:
+    return {
+        "attempt_count": 0,
+        "campaign_scientific_id": scientific_id,
+        "condition": condition,
+        "document_id": document.document_id,
+        "example_id": document.resolved_example_id,
+        "harness_incident": code,
+        "harness_message": message,
+    }
 
 
 def _failure_attempt(state: str, exc: BaseException, common: dict[str, Any]) -> AttemptRecord:
@@ -501,6 +804,7 @@ def _diagnostics(
     if metadata.get("truncated_input") is True:
         diagnostics["truncated_input"] = True
         diagnostics["silent_input_truncation"] = "operational_incident"
+        diagnostics["conditioning_violation"] = "truncated_input"
     unparseable = any(item.code == "UNPARSEABLE_CHUNK" for item in issues)
     empty = any(item.code == "EMPTY_MODEL_OUTPUT" for item in issues)
     if empty and not triples:
@@ -527,10 +831,12 @@ def _final_state(
     scientific_id: str,
     condition: str,
     document: SyntheticDocument,
-    principal_state: str,
+    principal_state: str | None,
     earlier: list[dict[str, Any]] | tuple[dict[str, Any], ...],
     attempt_count: int,
     diagnostics: Mapping[str, Any] | None = None,
+    parsed_triples: int | None = None,
+    invalid_lines: int | None = None,
 ) -> dict[str, Any]:
     record: dict[str, Any] = {
         "attempt_count": attempt_count,
@@ -538,23 +844,18 @@ def _final_state(
         "condition": condition,
         "document_id": document.document_id,
         "example_id": document.resolved_example_id,
-        "principal_state": principal_state,
     }
+    if principal_state is not None:
+        record["principal_state"] = principal_state
     if diagnostics:
         record["diagnostics"] = dict(diagnostics)
     if earlier:
         record["also_observed"] = list(earlier)
+    if parsed_triples is not None:
+        record["parsed_triples"] = parsed_triples
+    if invalid_lines is not None:
+        record["invalid_lines"] = invalid_lines
     return record
-
-
-def _export_would_abort(records: list[dict[str, Any]]) -> bool:
-    for record in records:
-        for triple in record["validated"]["triples"]:
-            for field_name in ("subject", "relation", "object"):
-                value = triple.get(field_name)
-                if not isinstance(value, str) or value.strip() == "":
-                    return True
-    return False
 
 
 def _script_identity(extractor: ScriptedTsvExtractor) -> list[dict[str, Any]]:
@@ -627,12 +928,13 @@ def _protocol_identity(benchmark_root: Path | None) -> dict[str, Any]:
     }
 
 
-def _relevant_fingerprint(shell_text: str, protocol_sha: str | None) -> str:
-    digest_source = [shell_text, protocol_sha or ""]
-    package = Path(__file__).resolve().parent
-    for path in sorted(package.glob("*.py")):
-        digest_source.append(path.read_text(encoding="utf-8"))
-    return sha256_text("\n".join(digest_source))
+def _protocol_text(benchmark_root: Path | None) -> str | None:
+    if benchmark_root is None:
+        return None
+    path = benchmark_root / "docs" / "CONTROLLED_EXPERIMENT_PROTOCOL.md"
+    if not path.is_file():
+        return None
+    return path.read_text(encoding="utf-8")
 
 
 def _freeze_gaps(
@@ -649,3 +951,20 @@ def _freeze_gaps(
     if readiness.get("status") != "observed":
         gaps.append("readiness_unresolved")
     return gaps
+
+
+def _empty_summary(status: str, reason: str) -> dict[str, Any]:
+    withheld = {"experimental_f1": False, "micro": None, "publication": "withheld_configuration_abort"}
+    return {
+        "campaign_contract_version": CAMPAIGN_CONTRACT_VERSION,
+        "campaign_status": status,
+        "estimands": {name: withheld for name in ("conservative", "conditional", "paired")},
+        "experimental_f1": False,
+        "publication": "withheld_configuration_abort",
+        "reason": reason,
+        "result_role": "synthetic_contract_test_not_experimental_f1",
+    }
+
+
+def _write_summary(output_dir: Path, summary: Mapping[str, Any]) -> None:
+    atomic_write_json(output_dir / "synthetic_evaluation_summary.json", summary)
