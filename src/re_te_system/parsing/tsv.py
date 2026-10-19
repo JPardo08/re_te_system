@@ -1,10 +1,12 @@
 """Condition-blind parser for tab-separated extractor output.
 
-A valid line has exactly two tab separators and three non-empty fields, in the
-order subject, relation, object. Fields are copied unchanged. This module does
-not strip, case-fold, deduplicate, sort, repair separators, or consult a
-relation inventory. Generation failures stay outside the parser: truncation is
-reported only when caller-supplied generation metadata says so.
+A valid line has exactly two tab separators and three fields that each contain
+at least one non-whitespace character, in the order subject, relation, object.
+Accepted fields are copied unchanged. A field that is empty after ``strip`` is
+rejected and does not become a triple. This module does not case-fold,
+deduplicate, sort, repair separators, or consult a relation inventory.
+Generation failures stay outside the parser: truncation is reported only when
+caller-supplied generation metadata says so.
 """
 
 from __future__ import annotations
@@ -54,7 +56,7 @@ def parse_tsv(text: str, segment_id: str | None = None) -> ParseResult:
             )
             continue
         subject, relation, object_ = line.split("\t")
-        if subject == "" or relation == "" or object_ == "":
+        if subject.strip() == "" or relation.strip() == "" or object_.strip() == "":
             issues.append(_line_issue(index, "Line has an empty required field"))
             continue
         triples.append(

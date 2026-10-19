@@ -158,6 +158,27 @@ def test_parse_errors_are_not_exported_and_evaluation_does_not_abort(tmp_path: P
     assert _counts(gold, rows) == (2, 0, 0)
 
 
+def test_whitespace_only_line_does_not_abort_p0(tmp_path: Path) -> None:
+    raw = "Acme\tsupplies\tWidget\nAcme\t   \tWidget\nAcme\towns\tDock\n"
+    record, rows = _export(tmp_path, raw)
+    assert record["raw"]["model_output"] == raw
+    assert [item["relation"] for item in record["parsed"]] == ["supplies", "owns"]
+    assert [row["relation"] for row in rows] == ["supplies", "owns"]
+    assert all(row["subject"] and row["relation"] and row["object"] for row in rows)
+    assert {
+        item["code"] for item in record["validated"]["violations"]
+    } == {"PARSE_UNPARSEABLE_CHUNK"}
+    assert any(
+        item["message"] == "Line has an empty required field"
+        for item in record["validated"]["violations"]
+    )
+    gold = [
+        _gold("g1", "Acme", "supplies", "Widget"),
+        _gold("g2", "Acme", "owns", "Dock"),
+    ]
+    assert _counts(gold, rows) == (2, 0, 0)
+
+
 def test_raw_remains_available_after_export(tmp_path: Path) -> None:
     raw = "Acme\tsupplies\tWidget\nbroken line\n"
     record, rows = _export(tmp_path, raw)

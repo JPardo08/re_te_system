@@ -154,14 +154,57 @@ def test_internal_and_outer_spaces_are_not_trimmed_by_the_parser() -> None:
     raw = "  Acme   North  \t  ships   goods  \t  Widget  "
     result = parse_tsv(raw)
     assert _fields(result) == [("  Acme   North  ", "  ships   goods  ", "  Widget  ")]
-    spaces_only = parse_tsv("Acme\t \tWidget")
-    assert spaces_only.triples[0].relation == " "
-    assert spaces_only.issues == ()
-    normalized = normalize_triples(spaces_only.triples)
-    assert normalized[0].relation == ""
-    validated = validate_structural(normalized)
-    assert any(item.code == "EMPTY_RELATION" for item in validated.violations)
-    assert len(validated.triples) == 1
+    assert result.issues == ()
+
+
+def test_whitespace_only_fields_are_rejected_without_creating_triples() -> None:
+    cases = {
+        "subject": "   \tsupplies\tWidget",
+        "relation": "Acme\t   \tWidget",
+        "object": "Acme\tsupplies\t   ",
+        "subject_and_relation": " \t \tWidget",
+        "relation_and_object": "Acme\t \t  ",
+        "nbsp_relation": "Acme\t\u00a0\tWidget",
+    }
+    for raw in cases.values():
+        result = parse_tsv(raw)
+        assert result.triples == ()
+        assert result.issues == (
+            ParseIssue(
+                "UNPARSEABLE_CHUNK",
+                "Line has an empty required field",
+                "soft",
+                0,
+            ),
+        )
+    crlf = parse_tsv("Acme\t   \tWidget\r\n")
+    assert crlf.triples == ()
+    assert crlf.issues[0].message == "Line has an empty required field"
+    surrounded = parse_tsv(
+        "Acme\tsupplies\tWidget\r\nAcme\t \tWidget\r\nNorth\towns\tDock\r\n"
+    )
+    assert _fields(surrounded) == [
+        ("Acme", "supplies", "Widget"),
+        ("North", "owns", "Dock"),
+    ]
+    assert surrounded.issues == (
+        ParseIssue(
+            "UNPARSEABLE_CHUNK",
+            "Line has an empty required field",
+            "soft",
+            1,
+        ),
+    )
+    raw = "Acme\topen-link\tWidget\nAcme\topen-link\tWidget\nAcme\t   \tWidget\n"
+    duplicated = parse_tsv(raw, "seg")
+    assert _fields(duplicated) == [
+        ("Acme", "open-link", "Widget"),
+        ("Acme", "open-link", "Widget"),
+    ]
+    assert duplicated.issues[0].chunk_index == 2
+    assert "condition" not in inspect.signature(parse_tsv).parameters
+    for _condition in ("C0", "C1", "C2", "C3", "C3-NL"):
+        assert parse_tsv(raw, "seg") == duplicated
 
 
 def test_crlf_does_not_keep_carriage_return() -> None:
