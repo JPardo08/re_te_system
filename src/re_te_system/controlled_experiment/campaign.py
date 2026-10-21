@@ -2,18 +2,22 @@
 
 The baseline runner remains responsible for baseline experiments. This module
 does not call it. The reused pieces are ``parse_tsv``, ``generation_issue``,
-``normalize_triples``, ``validate_structural``, and ``export_evaluation``.
+``validate_structural``, and ``export_evaluation``. Between the parser and
+structural validation, controlled triples use the frozen P0 normalization
+policy (NFC, outer strip, no lowercase, no internal whitespace collapse).
+The SoTA ``normalize_triples`` helper is not used on this path.
 
 EXP.3b.1 still accepts only ``SYNTHETIC_CONTRACT_TEST``. Scores are read from
 per-condition files produced by ``export_evaluation``. A truncated input is
 kept as evidence and is not a publishable observation. A harness failure is
-not recorded as a model failure. Real process timeouts and real tokenizers
-are not implemented.
+not recorded as a model failure. This synthetic executor does not enforce a
+process timeout. The separate Qwen runtime owns tokenizer measurement and
+subprocess timeout, and it does not relax this authorization.
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import json
 import os
 from pathlib import Path
@@ -24,6 +28,7 @@ from re_te_system.contracts import (
     PREDICTION_CONTRACT_VERSION,
     ExtractionContext,
     ParseIssue,
+    ParsedTriple,
     triple_to_dict,
 )
 from re_te_system.controlled_experiment.contracts import (
@@ -72,7 +77,6 @@ from re_te_system.controlled_experiment.reporting import (
     write_campaign_files,
 )
 from re_te_system.controlled_experiment.synthetic import ScriptedTsvExtractor
-from re_te_system.normalization.basic import normalize_triples
 from re_te_system.parsing.tsv import generation_issue, parse_tsv
 from re_te_system.runner.run import export_evaluation
 from re_te_system.validation.structural import validate_structural
@@ -371,6 +375,10 @@ def _finish(
         contract_reason is not None,
         contract_reason,
     )
+    recorded_manifest = dict(manifest)
+    operational = dict(recorded_manifest.get("operational") or {})
+    operational["export_sha256"] = dict(export_sha)
+    recorded_manifest["operational"] = operational
     result = {
         "attempts": [item.to_dict() for item in attempts],
         "campaign_status": status,
@@ -378,7 +386,7 @@ def _finish(
         "document_states": states,
         "evaluation_summary": summary,
         "implementation_fingerprint": fingerprint,
-        "manifest": manifest,
+        "manifest": recorded_manifest,
         "prediction_records": publishable,
         "scientific_id": scientific_id,
         "withheld_prediction_records": withheld,
@@ -753,6 +761,47 @@ def _failure_attempt(state: str, exc: BaseException, common: dict[str, Any]) -> 
     )
 
 
+def normalize_controlled_triples(triples: tuple[ParsedTriple, ...]) -> tuple[ParsedTriple, ...]:
+    """Apply the frozen P0 normalization policy to controlled-experiment triples.
+
+    Protocol sections A and E freeze matching as string equality after
+    ``unicode_nfc+outer_strip+lowercase_false``. The campaign identity already
+    records that policy. This function is the only normalizer between
+    ``parse_tsv`` and ``validate_structural`` on the controlled path. It does
+    not collapse internal whitespace, lowercase, alias, or drop duplicates.
+    ``normalize_text`` remains the SoTA baseline normalizer and is not called.
+    """
+    ensure_package("re_te_evaluation", "re_te_evaluation")
+    from re_te_evaluation.contracts import NormalizationPolicy
+
+    policy = NormalizationPolicy()
+
+    def text(value: str) -> str:
+        normalized = policy.normalize(value)
+        if not isinstance(normalized, str):
+            raise CampaignError("controlled normalization dropped a required string")
+        return normalized
+
+    def optional(value: str | None) -> str | None:
+        if not value:
+            return None
+        return text(value)
+
+    return tuple(
+        replace(
+            triple,
+            subject=text(triple.subject),
+            relation=text(triple.relation),
+            object=triple.object if triple.object_is_literal is True else text(triple.object),
+            subject_type=optional(triple.subject_type),
+            object_type=optional(triple.object_type),
+            datatype=optional(triple.datatype),
+            language=optional(triple.language),
+        )
+        for triple in triples
+    )
+
+
 def _completed_attempt(
     output: str,
     metadata: Mapping[str, Any],
@@ -761,7 +810,7 @@ def _completed_attempt(
     parsed = parse_tsv(output, None)
     extra = generation_issue(metadata)
     issues = parsed.issues if extra is None else (*parsed.issues, extra)
-    normalized = normalize_triples(parsed.triples)
+    normalized = normalize_controlled_triples(parsed.triples)
     validated = validate_structural(normalized, issues)
     attempt = AttemptRecord(
         principal_state="completed",

@@ -464,8 +464,25 @@ def _ids_with(states: list[Mapping[str, Any]], predicate: Any) -> list[str]:
     return sorted({row["document_id"] for row in states if predicate(row)})
 
 
+def gold_document_id(record: Mapping[str, Any]) -> str | None:
+    """Parent document of one Gold row, using official P0 identity.
+
+    An explicit ``document_id`` or ``doc`` is kept. Otherwise P0 takes the
+    prefix of the source id before ``#``, which is how canonical Hohfeld
+    annotations name their article (``annotation_id`` such as ``articulo_47#3``).
+    A row P0 cannot assign is unresolved and must not be dropped silently.
+    """
+    ensure_package("re_te_evaluation", "re_te_evaluation")
+    from re_te_evaluation.eligibility import InputContractError, _document_id, _source_id
+
+    try:
+        return _document_id(record, _source_id(record, 0))
+    except InputContractError:
+        return None
+
+
 def _gold_for(gold: tuple[Mapping[str, Any], ...], document_ids: set[str]) -> tuple[Mapping[str, Any], ...]:
-    return tuple(row for row in gold if row.get("document_id") in document_ids)
+    return tuple(row for row in gold if gold_document_id(row) in document_ids)
 
 
 def _rows_for(rows: list[Mapping[str, Any]], document_ids: set[str]) -> list[Mapping[str, Any]]:
