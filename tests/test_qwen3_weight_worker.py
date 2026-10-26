@@ -20,6 +20,10 @@ from re_te_system.controlled_experiment.qwen3 import (
     QWEN3_CONTROLLED_PAD_TOKEN_ID,
     QWEN3_EOS_POLICY_ID,
     QWEN3_OBSERVED_DEFAULT_REVISION,
+    QWEN3_PINNED_INDEX_DECLARED_TOTAL_SIZE,
+    QWEN3_PINNED_INDEX_TOTAL_SIZE_DELTA,
+    QWEN3_PINNED_SAFETENSORS_HEADER_BYTES,
+    QWEN3_PINNED_TENSOR_STORAGE_BYTES,
     QWEN3_REAL_MODE,
     QWEN3_SMOKE_INPUT_SCOPE,
     QWEN3_WEIGHT_EXECUTION_PHASE_LOCK,
@@ -32,10 +36,16 @@ from re_te_system.controlled_experiment.qwen3 import (
     Qwen3SmokeWorker,
     Qwen3WeightsNotAuthorized,
     Qwen3WorkerTimeout,
+    _check_weight_index,
     construct_qwen3_causal_lm,
     execution_blockers,
     inspect_qwen3_checkpoint,
+    invented_smoke_authorization,
+    issue_invented_smoke_permit,
+    load_qwen3_model,
+    load_qwen3_weights,
     official_weight_manifest,
+    paired_c0_c1_scientific_plan,
     proposed_smoke_contract,
     run_qwen3_contract_campaign,
     verify_qwen3_checkpoint,
@@ -143,6 +153,7 @@ def test_checkpoint_verifier_fail_closed_on_fixtures(tmp_path: Path) -> None:
     assert report["verified"] is True
     assert report["revision_file_used"] is False
     assert report["index_sha256_approved"] is False
+    assert report["index_total_size_anomaly"] is None
     assert isinstance(report["index_sha256"], str)
     assert (root / "revision.txt").read_text(encoding="utf-8").strip() == "main"
 
@@ -190,6 +201,139 @@ def test_checkpoint_verifier_fail_closed_on_fixtures(tmp_path: Path) -> None:
     foreign_index.write_text(json.dumps(foreign_payload), encoding="utf-8")
     with pytest.raises(Qwen3ConfigurationError, match="unexpected shard"):
         verify_qwen3_checkpoint(foreign, foreign_manifest)
+
+
+def _pinned_index(total_size: int | None) -> bytes:
+    payload: dict[str, object] = {
+        "weight_map": {
+            "model.embed_tokens.weight": "model-00001-of-00003.safetensors",
+            "model.layers.0.self_attn.q_proj.weight": "model-00002-of-00003.safetensors",
+            "lm_head.weight": "model-00003-of-00003.safetensors",
+        }
+    }
+    if total_size is not None:
+        payload["metadata"] = {"total_size": total_size}
+    return json.dumps(payload).encode("utf-8")
+
+
+def _pinned_names() -> list[str]:
+    return [str(item["filename"]) for item in QWEN3_WEIGHT_SHARDS]
+
+
+def test_pinned_checkpoint_records_the_known_total_size_anomaly() -> None:
+    errors: list[str] = []
+    anomaly = _check_weight_index(
+        _pinned_index(QWEN3_PINNED_INDEX_DECLARED_TOTAL_SIZE),
+        _pinned_names(),
+        [dict(item) for item in QWEN3_WEIGHT_SHARDS],
+        errors,
+    )
+    physical = sum(int(item["byte_size"]) for item in QWEN3_WEIGHT_SHARDS)
+    assert errors == []
+    assert anomaly is not None
+    assert anomaly["declared_total_size"] == 8045591552
+    assert anomaly["tensor_storage_bytes"] == 8044936192
+    assert anomaly["safetensors_header_bytes"] == 45808
+    assert anomaly["physical_shard_bytes"] == 8044982000
+    assert anomaly["declared_minus_tensor_storage"] == 655360
+    assert anomaly["index_sha256_approved"] is False
+    assert anomaly["declared_total_size"] == QWEN3_PINNED_INDEX_DECLARED_TOTAL_SIZE
+    assert anomaly["tensor_storage_bytes"] == QWEN3_PINNED_TENSOR_STORAGE_BYTES
+    assert anomaly["safetensors_header_bytes"] == QWEN3_PINNED_SAFETENSORS_HEADER_BYTES
+    assert anomaly["declared_minus_tensor_storage"] == QWEN3_PINNED_INDEX_TOTAL_SIZE_DELTA
+    assert anomaly["physical_shard_bytes"] == physical
+    assert anomaly["tensor_storage_bytes"] + anomaly["safetensors_header_bytes"] == physical
+    assert anomaly["declared_total_size"] - anomaly["tensor_storage_bytes"] == 655360
+    assert official_weight_manifest()["index_sha256"] is None
+    assert "weight index total_size does not match the shard bytes" not in errors
+
+
+def test_altered_shard_still_fails_checkpoint_integrity(tmp_path: Path) -> None:
+    root = tmp_path / "altered"
+    manifest = _fixture(root, _shards())
+    (root / "model-00001-of-00003.safetensors").write_bytes(b"shard-one-altered")
+    with pytest.raises(Qwen3ConfigurationError, match="sha256 or size mismatch"):
+        verify_qwen3_checkpoint(root, manifest)
+
+
+def test_wrong_physical_shard_size_still_fails_checkpoint_integrity(tmp_path: Path) -> None:
+    root = tmp_path / "physical"
+    manifest = _fixture(root, _shards())
+    manifest["shards"][0]["byte_size"] = int(manifest["shards"][0]["byte_size"]) + 1
+    with pytest.raises(Qwen3ConfigurationError, match="sha256 or size mismatch"):
+        verify_qwen3_checkpoint(root, manifest)
+
+
+def test_wrong_weight_map_still_fails_checkpoint_integrity(tmp_path: Path) -> None:
+    root = tmp_path / "weight-map"
+    manifest = _fixture(root, _shards())
+    index_path = root / "model.safetensors.index.json"
+    payload = json.loads(index_path.read_text(encoding="utf-8"))
+    payload["weight_map"]["weight.model-00002-of-00003.safetensors"] = "model-00099-of-00003.safetensors"
+    index_path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(Qwen3ConfigurationError, match="unexpected shard"):
+        verify_qwen3_checkpoint(root, manifest)
+
+
+def test_unexpected_pinned_total_size_anomaly_is_rejected() -> None:
+    physical = sum(int(item["byte_size"]) for item in QWEN3_WEIGHT_SHARDS)
+    unexpected = (
+        QWEN3_PINNED_TENSOR_STORAGE_BYTES,
+        physical,
+        QWEN3_PINNED_INDEX_DECLARED_TOTAL_SIZE + 1,
+        None,
+    )
+    for declared in unexpected:
+        errors: list[str] = []
+        anomaly = _check_weight_index(
+            _pinned_index(declared),
+            _pinned_names(),
+            [dict(item) for item in QWEN3_WEIGHT_SHARDS],
+            errors,
+        )
+        assert anomaly is None
+        assert any("not the recorded pinned discrepancy" in item for item in errors)
+
+
+def test_gold_phase_stays_blocked_when_the_pinned_anomaly_is_recorded(tmp_path: Path) -> None:
+    root = tmp_path / "checkpoint"
+    manifest = _fixture(root, _shards())
+    report = verify_qwen3_checkpoint(root, manifest)
+    assert report["verified"] is True
+    assert report["index_sha256_approved"] is False
+    errors: list[str] = []
+    anomaly = _check_weight_index(
+        _pinned_index(QWEN3_PINNED_INDEX_DECLARED_TOTAL_SIZE),
+        _pinned_names(),
+        [dict(item) for item in QWEN3_WEIGHT_SHARDS],
+        errors,
+    )
+    assert errors == [] and anomaly is not None
+    verification = {
+        "index_sha256": "ab" * 32,
+        "index_sha256_approved": False,
+        "index_total_size_anomaly": anomaly,
+        "revision": QWEN3_OBSERVED_DEFAULT_REVISION,
+        "revision_file_used": False,
+        "verified": True,
+    }
+    permit = issue_invented_smoke_permit(verification)
+    assert permit.index_sha256_approved is False
+    assert permit.index_sha256 == "ab" * 32
+    assert QWEN3_WEIGHT_EXECUTION_PHASE_LOCK is True
+    with pytest.raises(Qwen3WeightsNotAuthorized):
+        load_qwen3_weights(root)
+    with pytest.raises(Qwen3WeightsNotAuthorized, match="locked"):
+        construct_qwen3_causal_lm(root, invented_smoke_authorization(), proposed_smoke_contract(), verification)
+    with pytest.raises(Qwen3ConfigurationError, match="checkpoint integrity"):
+        load_qwen3_model(proposed_smoke_contract(), root, Qwen3ExecutionGrant(True, False, True, "gold"))
+    plan = paired_c0_c1_scientific_plan()
+    assert plan["authorization"]["executable"] is False
+    assert plan["authorization"]["execution_permitted"] is False
+    assert plan["authorization"]["gold_inference_authorized"] is False
+    assert plan["authorization"]["real_execution_authorized"] is False
+    with pytest.raises(CampaignError):
+        authorize_campaign(QWEN3_REAL_MODE, ("C0", "C1"))
 
 
 def test_worker_reuses_one_load_and_keeps_the_constructor_locked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,9 +1,13 @@
 """Controlled runtime contract for Qwen/Qwen3-4B-Instruct-2507.
 
-This module does not download weights, load a checkpoint, or authorize a
-campaign mode. ``authorize_campaign`` still accepts only
-``SYNTHETIC_CONTRACT_TEST``. A test double may exercise serialization and
-state transitions. That double is not a Qwen3 measurement.
+This module does not download weights and does not authorize a campaign mode.
+``authorize_campaign`` still accepts only ``SYNTHETIC_CONTRACT_TEST``. A test
+double may exercise serialization and state transitions. That double is not a
+Qwen3 measurement.
+
+Weight construction stays closed for Gold and for scientific runs. The only
+constructor that can call ``from_pretrained`` is the invented-smoke permit.
+An environment variable, a path, or a test grant cannot issue that permit.
 
 Verified upstream facts are constants below. Unapproved scientific choices
 stay ``None`` and are readiness blockers. The native context length declared
@@ -12,13 +16,14 @@ by the model card is not copied into ``effective_context_limit``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import importlib.util
 import json
 from pathlib import Path
 import signal
 import subprocess
+import sys
 from typing import Any, Callable, Mapping, Sequence
 
 from re_te_system.contracts import ExtractionContext, RawExtractionResult
@@ -97,8 +102,10 @@ QWEN3_TRANSPORT_TOKEN_IDS = frozenset({151645, 151643})
 QWEN3_REAL_MODE = "QWEN3_REAL_RUNTIME_CONTRACT"
 QWEN3_RESULT_ROLE = "qwen3_real_runtime_not_scientific_f1"
 QWEN3_RUNTIME_STATUS = "REAL_RUNTIME_IMPLEMENTED_NOT_EXECUTED"
-# Phase lock. The model constructor below stays unreachable until a later
-# explicit change. A grant, a path, or an environment variable cannot open it.
+# Phase lock. load_qwen3_weights, load_qwen3_model, construct_qwen3_causal_lm,
+# and every scientific campaign stay unreachable while this is true. A grant,
+# a path, or an environment variable cannot open those entries. The invented
+# smoke permit is a separate constructor and does not clear this lock.
 QWEN3_WEIGHT_EXECUTION_PHASE_LOCK = True
 # sha256 and byte size of the allowlisted files at the candidate revision.
 QWEN3_TOKENIZER_ASSETS = {
@@ -317,6 +324,8 @@ def readiness(contract: Qwen3GenerationContract | None = None) -> dict[str, Any]
         "blockers": list(selected.blockers()),
         "executable": False,
         "ready_for_cesvima": False,
+        "gold_inference_authorized": False,
+        "invented_smoke_permit_implemented": True,
         "ready_for_gold": False,
         "real_model_validated": False,
         "real_runtime_executed": False,
@@ -966,6 +975,17 @@ QWEN3_WEIGHT_INDEX_NAME = "model.safetensors.index.json"
 QWEN3_SMOKE_INPUT_SCOPE = "invented_smoke_only"
 QWEN3_PROPOSED_SMOKE_ID = "qwen3-proposed-smoke-not-scientific"
 # Hub LFS identities observed for the candidate revision. The index has no approved SHA-256.
+# metadata.total_size is tensor storage (numel times dtype width), not the sum of
+# shard file sizes. A shard file is an 8-byte header length, a JSON header, and
+# the tensor payload. On the candidate revision the allowlisted shards sum to
+# 8044982000 physical bytes, of which 8044936192 are tensor storage and 45808
+# are headers. The pinned index declares 8045591552, which is 655360 above the
+# measured tensor storage. That discrepancy is recorded. It is not an approved
+# index SHA-256 and it does not open Gold.
+QWEN3_PINNED_TENSOR_STORAGE_BYTES = 8044936192
+QWEN3_PINNED_SAFETENSORS_HEADER_BYTES = 45808
+QWEN3_PINNED_INDEX_DECLARED_TOTAL_SIZE = 8045591552
+QWEN3_PINNED_INDEX_TOTAL_SIZE_DELTA = 655360
 QWEN3_WEIGHT_SHARDS = (
     {
         "byte_size": 3957900840,
@@ -1039,6 +1059,532 @@ class Qwen3SmokeAuthorization:
     generation_timeout_seconds: float | None = None
 
 
+QWEN3_INVENTED_SMOKE_RESULT_ROLE = "qwen3_invented_smoke_not_scientific_f1"
+QWEN3_SMOKE_DEVICE_POLICY = "cuda:0"
+QWEN3_SMOKE_DTYPE_POLICY = "bfloat16"
+QWEN3_SMOKE_LOAD_TIMEOUT_SECONDS = 1200.0
+QWEN3_SMOKE_GENERATION_TIMEOUT_SECONDS = 180.0
+QWEN3_CANONICAL_DOCUMENT_COUNT = 36
+QWEN3_INVENTED_SMOKE_DOCUMENTS = (
+    {
+        "document_id": "invented-smoke-01",
+        "text": "Alpha supplies Beta with one invented crate in this smoke sentence.",
+    },
+    {
+        "document_id": "invented-smoke-02",
+        "text": "Gamma owes Delta one invented token and nothing from a statute.",
+    },
+)
+_PROMPT_EXCLUSIONS = ("annotated_text", "<rel>", "<e1>", "<e2>", "[[CONDITIONING]]", "[[TEXT]]")
+
+
+def invented_smoke_authorization() -> Qwen3SmokeAuthorization:
+    """Operational smoke grant. It is not a scientific freeze and it is not a test grant."""
+    return Qwen3SmokeAuthorization(
+        granted=True,
+        revision=QWEN3_OBSERVED_DEFAULT_REVISION,
+        input_scope=QWEN3_SMOKE_INPUT_SCOPE,
+        conditions=("C0", "C1"),
+        configuration_id=QWEN3_PROPOSED_SMOKE_ID,
+        device_policy=QWEN3_SMOKE_DEVICE_POLICY,
+        dtype_policy=QWEN3_SMOKE_DTYPE_POLICY,
+        load_timeout_seconds=QWEN3_SMOKE_LOAD_TIMEOUT_SECONDS,
+        generation_timeout_seconds=QWEN3_SMOKE_GENERATION_TIMEOUT_SECONDS,
+    )
+
+
+def invented_smoke_generation_contract() -> Qwen3GenerationContract:
+    """Smoke copy of the proposed contract plus the machine bounds required to load.
+
+    Decoding, context, and the output budget stay the proposed smoke values.
+    Device, dtype, and the generation timeout are operational and are not a
+    scientific approval of those fields.
+    """
+    return replace(
+        proposed_smoke_contract(),
+        device_policy=QWEN3_SMOKE_DEVICE_POLICY,
+        dtype_policy=QWEN3_SMOKE_DTYPE_POLICY,
+        timeout_seconds=QWEN3_SMOKE_GENERATION_TIMEOUT_SECONDS,
+    )
+
+
+@dataclass(frozen=True)
+class Qwen3InventedSmokePermit:
+    """Sealed permission to construct Qwen3 for the invented corpus only.
+
+    ``index_sha256_approved`` stays false. Observing the index digest does not
+    approve it, and this object cannot authorize Gold or a C0/C1 scientific run.
+    """
+
+    authorization: Qwen3SmokeAuthorization
+    document_ids: tuple[str, ...]
+    document_text_sha256: tuple[str, ...]
+    canonical_document_count: int
+    canonical_text_sha256: frozenset[str]
+    index_sha256: str
+    index_sha256_approved: bool
+    verification_revision: str
+
+
+def canonical_cohort_identity() -> dict[str, Any]:
+    """Hash the 36 Hohfeld documents without copying annotations into a prompt.
+
+    ``load_hohfeld_documents`` is the existing reader. It keeps ``document_id``
+    and ``source_text`` and drops annotation and provenance fields.
+    """
+    from re_te_system.controlled_experiment.dependencies import ensure_package, repository_root_from_package
+    from re_te_system.runner.run import load_hohfeld_documents
+
+    ensure_package("re_te_benchmark", "re_te_benchmark")
+    root = repository_root_from_package("re_te_benchmark")
+    if root is None:
+        raise Qwen3ExecutionNotAuthorized("the benchmark checkout is required to prove the smoke is disjoint from Gold")
+    documents_path = root / "datasets" / "teresia_hohfeld" / "canonical" / "documents.jsonl"
+    annotations_path = root / "datasets" / "teresia_hohfeld" / "canonical" / "annotations.jsonl"
+    manifest_path = root / "datasets" / "teresia_hohfeld" / "manifests" / "manifest.json"
+    for path in (documents_path, annotations_path, manifest_path):
+        if not path.is_file():
+            raise Qwen3ExecutionNotAuthorized("missing canonical benchmark file: " + path.name)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, list):
+        raise Qwen3ExecutionNotAuthorized("canonical manifest has no artifacts")
+    expected = {
+        str(item.get("relative_path")): item.get("sha256")
+        for item in artifacts
+        if isinstance(item, dict)
+    }
+    document_hash = _sha256_file(documents_path)
+    annotation_hash = _sha256_file(annotations_path)
+    if expected.get("datasets/teresia_hohfeld/canonical/documents.jsonl") != document_hash:
+        raise Qwen3ExecutionNotAuthorized("canonical documents hash does not match the benchmark manifest")
+    if expected.get("datasets/teresia_hohfeld/canonical/annotations.jsonl") != annotation_hash:
+        raise Qwen3ExecutionNotAuthorized("canonical annotations hash does not match the benchmark manifest")
+    records = load_hohfeld_documents(documents_path)
+    if len(records) != QWEN3_CANONICAL_DOCUMENT_COUNT:
+        raise Qwen3ExecutionNotAuthorized("the canonical cohort is not the 36 Hohfeld documents")
+    if len({item.document_id for item in records}) != len(records):
+        raise Qwen3ExecutionNotAuthorized("canonical document ids are not unique")
+    return {
+        "annotation_sha256": annotation_hash,
+        "annotations_path": annotations_path,
+        "document_ids": tuple(item.document_id for item in records),
+        "document_sha256": document_hash,
+        "documents_path": documents_path,
+        "text_sha256": tuple(sha256_text(item.text) for item in records),
+    }
+
+
+def issue_invented_smoke_permit(verification: Mapping[str, Any]) -> Qwen3InventedSmokePermit:
+    """Issue the smoke permit or raise. This does not load weights or clear the phase lock."""
+    if QWEN3_WEIGHT_EXECUTION_PHASE_LOCK is not True:
+        raise Qwen3WeightsNotAuthorized("refusing a smoke permit while the phase lock is open")
+    authorization = invented_smoke_authorization()
+    _require_smoke_authorization(authorization)
+    if verification.get("verified") is not True:
+        raise Qwen3ConfigurationError("smoke permit requires a verified checkpoint")
+    if verification.get("revision_file_used") is not False:
+        raise Qwen3ConfigurationError("smoke permit does not accept revision.txt as identity")
+    if verification.get("index_sha256_approved") is not False:
+        raise Qwen3ConfigurationError("index sha256 is not an approved pin")
+    index_sha = verification.get("index_sha256")
+    if not isinstance(index_sha, str) or len(index_sha) != 64 or any(character not in "0123456789abcdef" for character in index_sha):
+        raise Qwen3ConfigurationError("smoke permit requires the observed index sha256")
+    if verification.get("revision") != QWEN3_OBSERVED_DEFAULT_REVISION:
+        raise Qwen3ConfigurationError("checkpoint verification revision is not the candidate")
+    cohort = canonical_cohort_identity()
+    invented_ids = tuple(item["document_id"] for item in QWEN3_INVENTED_SMOKE_DOCUMENTS)
+    invented_hashes = tuple(sha256_text(item["text"]) for item in QWEN3_INVENTED_SMOKE_DOCUMENTS)
+    canonical_ids = set(cohort["document_ids"])
+    canonical_hashes = set(cohort["text_sha256"])
+    if any(document_id in canonical_ids or document_id.startswith("articulo_") for document_id in invented_ids):
+        raise Qwen3ExecutionNotAuthorized("invented smoke ids collide with the Gold cohort")
+    if any(digest in canonical_hashes for digest in invented_hashes):
+        raise Qwen3ExecutionNotAuthorized("invented smoke text collides with a canonical document")
+    if len(set(invented_ids)) != len(invented_ids) or len(invented_ids) != len(QWEN3_INVENTED_SMOKE_DOCUMENTS):
+        raise Qwen3ConfigurationError("invented smoke corpus is not the declared pair")
+    return Qwen3InventedSmokePermit(
+        authorization=authorization,
+        document_ids=invented_ids,
+        document_text_sha256=invented_hashes,
+        canonical_document_count=len(cohort["document_ids"]),
+        canonical_text_sha256=frozenset(canonical_hashes),
+        index_sha256=index_sha,
+        index_sha256_approved=False,
+        verification_revision=QWEN3_OBSERVED_DEFAULT_REVISION,
+    )
+
+
+def construct_invented_smoke_model(
+    checkpoint_dir: Path,
+    permit: Qwen3InventedSmokePermit,
+    verification: Mapping[str, Any],
+) -> Any:
+    """Load the local causal LM for the invented smoke. Gold stays locked.
+
+    This function does not call ``_construct_locked_model``. That function
+    remains the closed entry used by ``load_qwen3_model``.
+    """
+    _require_invented_smoke_permit(permit, verification)
+    if QWEN3_WEIGHT_EXECUTION_PHASE_LOCK is not True:
+        raise Qwen3WeightsNotAuthorized("the phase lock must stay closed for Gold and scientific runs")
+    from transformers import AutoModelForCausalLM
+
+    model = AutoModelForCausalLM.from_pretrained(
+        str(checkpoint_dir),
+        local_files_only=True,
+        dtype=_torch_dtype(permit.authorization.dtype_policy or ""),
+    )
+    model = model.to(permit.authorization.device_policy)
+    model.eval()
+    return model
+
+
+def greedy_continuation(
+    model: Any,
+    input_ids: Sequence[int],
+    generate_kwargs: Mapping[str, Any],
+    *,
+    seed: int,
+) -> list[int]:
+    """Greedy continuation. Sampling keys from generation_config.json are refused."""
+    if generate_kwargs.get("do_sample") is not False:
+        raise Qwen3ConfigurationError("the worker refuses sampling")
+    if any(name in generate_kwargs for name in ("temperature", "top_p", "top_k")):
+        raise Qwen3ConfigurationError("greedy generation must not inherit sampling parameters")
+    import torch
+
+    torch.manual_seed(int(seed))
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(int(seed))
+    tensor = torch.tensor([list(input_ids)], dtype=torch.long)
+    device = getattr(model, "device", None)
+    if device is not None:
+        tensor = tensor.to(device)
+    forward = {
+        "do_sample": False,
+        "eos_token_id": list(generate_kwargs["eos_token_id"]),
+        "max_new_tokens": generate_kwargs["max_new_tokens"],
+        "pad_token_id": generate_kwargs["pad_token_id"],
+    }
+    with torch.inference_mode():
+        output = model.generate(tensor, **forward)
+    row = output[0]
+    sequence = [int(item) for item in row.tolist()] if hasattr(row, "tolist") else [int(item) for item in row]
+    return sequence
+
+
+def prepare_invented_smoke_requests(tokenizer: Any) -> list[dict[str, Any]]:
+    """Build C0 and C1 requests for the invented corpus. No Gold text is rendered."""
+    contract = invented_smoke_generation_contract()
+    runtime = Qwen3Runtime(contract, tokenizer=tokenizer)
+    requests: list[dict[str, Any]] = []
+    for spec in QWEN3_INVENTED_SMOKE_DOCUMENTS:
+        for condition in ("C0", "C1"):
+            prepared = runtime.prepare(condition, spec["text"])
+            rendered = prepared.rendered_prompt
+            if any(marker in rendered for marker in _PROMPT_EXCLUSIONS):
+                raise Qwen3ConfigurationError("invented smoke prompt contains an excluded marker")
+            if "articulo_" in rendered:
+                raise Qwen3ConfigurationError("invented smoke prompt names a canonical document")
+            input_ids = official_input_token_ids(tokenizer, prepared.serialized_input)
+            request = generation_request(
+                contract,
+                input_ids,
+                condition=condition,
+                document_id=spec["document_id"],
+                attempt_index=1,
+            )
+            blocked = prepared.preflight.get("fits") is not True or prepared.preflight.get("assurance") == "not_assessed"
+            requests.append(
+                {
+                    "condition": condition,
+                    "document_id": spec["document_id"],
+                    "fits": prepared.preflight.get("fits") is True and not blocked,
+                    "input_ids": input_ids,
+                    "model_generate_kwargs": request["model_generate_kwargs"],
+                    "preflight": prepared.preflight,
+                    "rendered_prompt_sha256": prepared.rendered_prompt_sha256,
+                    "serialized_input_sha256": prepared.serialized_input_sha256,
+                    "text_sha256": sha256_text(spec["text"]),
+                }
+            )
+    return requests
+
+
+def invented_smoke_technical_pass(attempts: Sequence[Mapping[str, Any]], load_count: int) -> bool:
+    """Infrastructure pass. A parse failure does not decide it, and neither does P0."""
+    expected = {
+        (item["document_id"], condition)
+        for item in QWEN3_INVENTED_SMOKE_DOCUMENTS
+        for condition in ("C0", "C1")
+    }
+    if load_count != 1 or len(attempts) != len(expected):
+        return False
+    seen: set[tuple[str, str]] = set()
+    for attempt in attempts:
+        key = (str(attempt.get("document_id")), str(attempt.get("condition")))
+        if key not in expected or key in seen:
+            return False
+        seen.add(key)
+        if attempt.get("fits") is not True or attempt.get("within_budget") is not True:
+            return False
+        if attempt.get("exception"):
+            return False
+    return seen == expected
+
+
+def paired_c0_c1_scientific_plan() -> dict[str, Any]:
+    """Declarative C0/C1 plan for the 36 documents. It does not run inference.
+
+    Prompts for a later run must be shell v2 plus ``source_text`` only. This
+    plan stores identifiers and hashes. It does not store source text, Gold
+    annotations, or a selected score.
+    """
+    from re_te_system.controlled_experiment.dependencies import ensure_package
+    from re_te_system.evaluation_bridge.contracts import ESTIMANDS, FROZEN_POLICY
+
+    ensure_package("re_te_benchmark", "re_te_benchmark")
+    from re_te_benchmark.conditioning.c2 import load_c1_labels
+    from re_te_benchmark.conditioning.shell import SHELL_ID, conditioning_for, shell_template
+
+    cohort = canonical_cohort_identity()
+    labels = list(load_c1_labels())
+    if labels != ["Duty", "Right", "Privilege", "NoRight"]:
+        raise Qwen3ConfigurationError("C1 labels are not the declared Hohfeld inventory")
+    c0_slot = conditioning_for("C0")
+    c1_slot = conditioning_for("C1")
+    if c0_slot != "":
+        raise Qwen3ConfigurationError("C0 slot is not empty")
+    if SHELL_ID != "common-instruction-shell-v2":
+        raise Qwen3ConfigurationError("shell is not v2")
+    contract = proposed_smoke_contract()
+    documents = [
+        {"document_id": document_id, "text_sha256": digest}
+        for document_id, digest in zip(cohort["document_ids"], cohort["text_sha256"], strict=True)
+    ]
+    return {
+        "artifact_layout": {
+            "C0": "conditions/C0/evaluation_predictions.jsonl",
+            "C1": "conditions/C1/evaluation_predictions.jsonl",
+            "bridge_output_must_not_be_inside_campaign": True,
+            "campaign_manifest": "campaign_manifest.json",
+            "separate_condition_directories": True,
+        },
+        "authorization": {
+            "executable": False,
+            "execution_permitted": False,
+            "gold_inference_authorized": False,
+            "real_execution_authorized": False,
+            "requires_human_review_after_invented_smoke_pass": True,
+            "requires_invented_smoke_technical_pass": True,
+        },
+        "cohort": {
+            "annotation_sha256": cohort["annotation_sha256"],
+            "annotations_used_in_prompts": False,
+            "document_count": len(documents),
+            "document_sha256": cohort["document_sha256"],
+            "documents": documents,
+            "excluded_record_fields": ["annotations", "provenance"],
+            "order": "load_hohfeld_documents",
+            "prompt_fields": ["document_id", "source_text"],
+        },
+        "conditions": {
+            "C0": {"slot_sha256": sha256_text(c0_slot), "target_inventory": None},
+            "C1": {
+                "relation_labels": labels,
+                "slot_sha256": sha256_text(c1_slot),
+                "target_inventory": labels,
+            },
+        },
+        "decoding": {
+            "approved_as_scientific_freeze": False,
+            "bitwise_determinism": False,
+            "do_sample": contract.do_sample,
+            "effective_context_limit": contract.effective_context_limit,
+            "eos_policy_id": contract.eos_policy_id,
+            "max_new_tokens": contract.max_new_tokens,
+            "reserved_output_tokens": contract.reserved_output_tokens,
+            "seed": contract.seed,
+            "temperature": None,
+            "top_k": None,
+            "top_p": None,
+        },
+        "estimands": {
+            "predeclared": list(ESTIMANDS),
+            "primary_definition": "conservative",
+            "selected_after_observing_scores": False,
+            "selected_estimand": None,
+        },
+        "evaluation": {
+            "evaluator": "P0",
+            "policy": dict(FROZEN_POLICY),
+            "result_role_if_run_today": "not_a_scientific_f1",
+        },
+        "identity": {
+            "checkpoint_revision": QWEN3_OBSERVED_DEFAULT_REVISION,
+            "checkpoint_revision_role": "technical_validation_not_scientific_pin",
+            "index_sha256_approved": False,
+            "model_id": QWEN3_MODEL_ID,
+            "shell_id": SHELL_ID,
+            "shell_sha256": sha256_text(shell_template()),
+            "tokenizer_revision": QWEN3_OBSERVED_DEFAULT_REVISION,
+        },
+        "parser": "tsv",
+        "normalization": FROZEN_POLICY["normalization_policy"],
+        "plan_id": "qwen3-c0-c1-paired-after-invented-smoke",
+        "remaining_blockers": [
+            "gold_inference_not_authorized",
+            "human_review_required",
+            "index_sha256_not_approved",
+            "invented_smoke_not_a_substitute_for_the_36_document_run",
+            "phase_lock_closed_for_scientific_execution",
+            "weight_execution_not_authorized_for_gold",
+        ],
+        "training": False,
+    }
+
+
+def claim_fresh_smoke_directory(path: Path) -> None:
+    """Create an empty smoke directory. A partial run is not resumed."""
+    try:
+        Path(path).mkdir(parents=True, exist_ok=False)
+    except FileExistsError as exc:
+        raise Qwen3ConfigurationError(
+            "smoke output directory already exists; recovery does not resume a partial run"
+        ) from exc
+
+
+def expected_invented_input_ids(tokenizer: Any, document_id: str, condition: str) -> list[int]:
+    spec = next((item for item in QWEN3_INVENTED_SMOKE_DOCUMENTS if item["document_id"] == document_id), None)
+    if spec is None or condition not in ("C0", "C1"):
+        raise Qwen3ExecutionNotAuthorized("worker request is outside the invented smoke corpus")
+    prepared = Qwen3Runtime(invented_smoke_generation_contract(), tokenizer=tokenizer).prepare(condition, spec["text"])
+    return official_input_token_ids(tokenizer, prepared.serialized_input)
+
+
+def handle_invented_smoke_message(
+    state: dict[str, Any],
+    message: Mapping[str, Any],
+    *,
+    construct: Callable[..., Any] | None = None,
+    generate: Callable[..., Sequence[int]] | None = None,
+    verify: Callable[[Path], Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """One persistent worker turn. The second load does not construct again."""
+    if any(name in message for name in ("text", "prompt", "tokenizer", "annotations", "gold")):
+        raise Qwen3ConfigurationError("the smoke worker does not accept text, gold, or a tokenizer payload")
+    operation = message.get("op")
+    if operation == "load":
+        if state.get("model") is not None:
+            return {
+                "index_sha256_approved": False,
+                "load_count": state["load_count"],
+                "ok": True,
+                "weights_executed": True,
+            }
+        checkpoint_dir = Path(str(message["checkpoint_dir"]))
+        tokenizer_dir = Path(str(message["tokenizer_dir"]))
+        checker = verify_qwen3_checkpoint if verify is None else verify
+        verification = checker(checkpoint_dir)
+        permit = issue_invented_smoke_permit(verification)
+        tokenizer = load_qwen3_tokenizer(tokenizer_dir)
+        builder = construct_invented_smoke_model if construct is None else construct
+        state["model"] = builder(checkpoint_dir, permit, verification)
+        state["tokenizer"] = tokenizer
+        state["permit"] = permit
+        state["load_count"] = 1
+        state["verification"] = verification
+        return {
+            "index_sha256": verification["index_sha256"],
+            "index_sha256_approved": False,
+            "load_count": 1,
+            "ok": True,
+            "weights_executed": True,
+        }
+    if operation != "generate":
+        raise Qwen3ConfigurationError("smoke worker operation is not load or generate")
+    if state.get("model") is None or state.get("tokenizer") is None:
+        raise Qwen3WorkerFailed("smoke worker received generate before load")
+    document_id = str(message.get("document_id"))
+    condition = str(message.get("condition"))
+    supplied = [int(item) for item in message["input_ids"]]
+    expected = expected_invented_input_ids(state["tokenizer"], document_id, condition)
+    if supplied != expected:
+        raise Qwen3ExecutionNotAuthorized("worker input ids are not the invented smoke prompt")
+    kwargs = dict(message["model_generate_kwargs"])
+    if kwargs.get("max_new_tokens") != invented_smoke_generation_contract().max_new_tokens:
+        raise Qwen3ConfigurationError("generation budget does not match the smoke contract")
+    producer = greedy_continuation if generate is None else generate
+    sequence = [int(item) for item in producer(state["model"], supplied, kwargs, seed=int(invented_smoke_generation_contract().seed or 0))]
+    if sequence[: len(supplied)] != supplied:
+        raise Qwen3ConfigurationError("worker output does not start with the preflight ids")
+    new_tokens = sequence[len(supplied) :]
+    if len(new_tokens) > int(invented_smoke_generation_contract().max_new_tokens or 0):
+        raise Qwen3ConfigurationError("worker returned more new tokens than max_new_tokens")
+    termination = "eos" if new_tokens and new_tokens[-1] == QWEN3_CONTROLLED_EOS_TOKEN_IDS[0] else "length"
+    return {
+        "load_count": state["load_count"],
+        "ok": True,
+        "sequence_ids": sequence,
+        "termination": termination,
+        "weights_executed": True,
+    }
+
+
+def serve_invented_smoke_worker() -> None:
+    """Read one JSON object per line and keep the loaded model for later lines."""
+    state: dict[str, Any] = {"load_count": 0, "model": None, "tokenizer": None}
+    for line in sys.stdin:
+        if line.strip() == "":
+            continue
+        message = json.loads(line)
+        if not isinstance(message, dict):
+            raise Qwen3WorkerFailed("worker result is not an object")
+        response = handle_invented_smoke_message(state, message)
+        sys.stdout.write(json.dumps(response) + "\n")
+        sys.stdout.flush()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            block = handle.read(1024 * 1024)
+            if not block:
+                break
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _require_smoke_authorization(authorization: Qwen3SmokeAuthorization) -> None:
+    if isinstance(authorization, Qwen3ExecutionGrant) or not isinstance(authorization, Qwen3SmokeAuthorization):
+        raise Qwen3WeightsNotAuthorized("a test grant cannot authorize invented-smoke weights")
+    expected = invented_smoke_authorization()
+    if authorization != expected:
+        raise Qwen3ExecutionNotAuthorized("smoke authorization is outside the invented-smoke bounds")
+
+
+def _require_invented_smoke_permit(
+    permit: Qwen3InventedSmokePermit,
+    verification: Mapping[str, Any],
+) -> None:
+    if not isinstance(permit, Qwen3InventedSmokePermit):
+        raise Qwen3WeightsNotAuthorized("model construction requires an invented smoke permit")
+    if permit.index_sha256_approved is not False or verification.get("index_sha256_approved") is not False:
+        raise Qwen3ConfigurationError("index sha256 must remain unapproved")
+    if permit.index_sha256 != verification.get("index_sha256"):
+        raise Qwen3ConfigurationError("permit index sha256 does not match the verification")
+    if verification.get("verified") is not True:
+        raise Qwen3ConfigurationError("refusing to construct a model without a verified checkpoint")
+    _require_smoke_authorization(permit.authorization)
+    if permit.canonical_document_count != QWEN3_CANONICAL_DOCUMENT_COUNT:
+        raise Qwen3ExecutionNotAuthorized("smoke permit was not checked against the 36 document cohort")
+    invented_ids = tuple(item["document_id"] for item in QWEN3_INVENTED_SMOKE_DOCUMENTS)
+    if permit.document_ids != invented_ids:
+        raise Qwen3ExecutionNotAuthorized("smoke permit corpus is not the invented pair")
+
+
 def inspect_qwen3_checkpoint(
     directory: Path,
     manifest: Mapping[str, Any] | None = None,
@@ -1076,6 +1622,7 @@ def inspect_qwen3_checkpoint(
     index_path = root / index_name
     index_sha = None
     total_size = None
+    total_size_anomaly = None
     if not index_path.is_file():
         errors.append("missing required checkpoint file: " + index_name)
     else:
@@ -1084,7 +1631,7 @@ def inspect_qwen3_checkpoint(
         expected_index_size = selected.get("index_byte_size")
         if expected_index_size is not None and len(index_bytes) != expected_index_size:
             errors.append("weight index size does not match the approved manifest")
-        _check_weight_index(index_bytes, expected_names, shards, errors)
+        total_size_anomaly = _check_weight_index(index_bytes, expected_names, shards, errors)
         try:
             payload = json.loads(index_bytes.decode("utf-8"))
             metadata = payload.get("metadata") if isinstance(payload, dict) else None
@@ -1101,6 +1648,7 @@ def inspect_qwen3_checkpoint(
         "index_sha256": index_sha,
         "index_sha256_approved": False,
         "index_total_size": total_size,
+        "index_total_size_anomaly": total_size_anomaly,
         "revision": selected.get("revision"),
         "revision_file_used": False,
         "verified": not errors,
@@ -1222,24 +1770,81 @@ def _hash_required_file(path: Path, spec: Mapping[str, Any], errors: list[str]) 
     }
 
 
+def _pinned_shard_identity(shards: Sequence[Mapping[str, Any]]) -> bool:
+    try:
+        observed = frozenset(
+            (str(item["filename"]), int(item["byte_size"]), str(item["sha256"]))
+            for item in shards
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+    expected = frozenset(
+        (str(item["filename"]), int(item["byte_size"]), str(item["sha256"]))
+        for item in QWEN3_WEIGHT_SHARDS
+    )
+    return len(observed) == len(shards) == len(QWEN3_WEIGHT_SHARDS) and observed == expected
+
+
+def _pinned_index_total_size_anomaly(errors: list[str]) -> dict[str, Any] | None:
+    physical = sum(int(item["byte_size"]) for item in QWEN3_WEIGHT_SHARDS)
+    tensor = QWEN3_PINNED_TENSOR_STORAGE_BYTES
+    headers = QWEN3_PINNED_SAFETENSORS_HEADER_BYTES
+    declared = QWEN3_PINNED_INDEX_DECLARED_TOTAL_SIZE
+    delta = QWEN3_PINNED_INDEX_TOTAL_SIZE_DELTA
+    if physical != tensor + headers or declared - tensor != delta:
+        errors.append("pinned total_size anomaly figures are inconsistent")
+        return None
+    return {
+        "declared_minus_tensor_storage": delta,
+        "declared_total_size": declared,
+        "index_sha256_approved": False,
+        "physical_shard_bytes": physical,
+        "safetensors_header_bytes": headers,
+        "semantics": (
+            "metadata.total_size counts tensor storage bytes, not shard file bytes; "
+            "the pinned index exceeds measured tensor storage and its SHA-256 stays unapproved"
+        ),
+        "tensor_storage_bytes": tensor,
+    }
+
+
+def _declared_total_size(metadata: object) -> int | None:
+    if not isinstance(metadata, dict) or "total_size" not in metadata:
+        return None
+    declared = metadata.get("total_size")
+    if isinstance(declared, bool) or not isinstance(declared, int):
+        return None
+    return declared
+
+
 def _check_weight_index(
     raw: bytes,
     expected_names: list[str],
     shards: list[Mapping[str, Any]],
     errors: list[str],
-) -> None:
+) -> dict[str, Any] | None:
+    """Check the index map. Return the pinned total_size anomaly, or None.
+
+    A non-pinned fixture that declares total_size must equal the sum of its
+    manifest shard byte sizes. Those fixtures are not safetensors, so tensor
+    storage cannot be measured and a different declaration fails closed.
+    Absence of the field stays the previous behaviour.
+    The pinned allowlisted shards are the only checkpoint whose tensor storage
+    was measured. Their published total_size is the recorded anomaly. Any
+    other declaration on that identity is an unexpected anomaly.
+    """
     try:
         payload = json.loads(raw.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError):
         errors.append("weight index is not JSON")
-        return
+        return None
     if not isinstance(payload, dict):
         errors.append("weight index is not an object")
-        return
+        return None
     mapping = payload.get("weight_map")
     if not isinstance(mapping, dict) or not mapping:
         errors.append("weight index has no tensor map")
-        return
+        return None
     referenced: set[str] = set()
     for tensor_name, shard_name in mapping.items():
         if not isinstance(tensor_name, str) or tensor_name == "":
@@ -1255,10 +1860,17 @@ def _check_weight_index(
     if missing:
         errors.append("weight index does not reference: " + ",".join(missing))
     metadata = payload.get("metadata")
+    declared = _declared_total_size(metadata)
+    if _pinned_shard_identity(shards):
+        if declared == QWEN3_PINNED_INDEX_DECLARED_TOTAL_SIZE:
+            return _pinned_index_total_size_anomaly(errors)
+        errors.append("weight index total_size is not the recorded pinned discrepancy")
+        return None
     if isinstance(metadata, dict) and "total_size" in metadata:
         expected_total = sum(int(item["byte_size"]) for item in shards if "byte_size" in item)
-        if metadata.get("total_size") != expected_total:
+        if declared is None or declared != expected_total:
             errors.append("weight index total_size does not match the shard bytes")
+    return None
 
 
 class Qwen3SmokeWorker:
