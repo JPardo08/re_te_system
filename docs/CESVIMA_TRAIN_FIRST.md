@@ -220,3 +220,9 @@ No se ha documentado una cuenta SLURM ni un mail para este usuario. Los jobs no 
 ## Frontera con C0/C1
 
 C0 y C1 no estan en este DAG. Siguen sin backbone comun controlado, sin prompt comun, sin gramatica de salida, sin payload de ejecucion C0 distinto de `documents.jsonl`, y sin payload ni extractor C1. Las etiquetas C1 existen en `re_te_benchmark/schemas/c1/hohfeld_labels.json` (`Duty`, `Right`, `Privilege`, `NoRight`) y no se usan aqui. `CONDITIONING_SPEC` congela metadatos, no prompts. C2 sigue parcial y C3 no esta listo. Esta capa no los implementa.
+
+## Checkpoint operativo 2026-10-26
+
+El DAG, los hashes y los gates de este documento siguen siendo el contrato de envio. La sesion del 26 de octubre no los sustituye. Lo observado ese dia, con jobs, la recuperacion de bytes UIE tras el fallo de J09 `1348833`, el smoke tecnico Qwen3 y los resultados que seguian abiertos al cerrar la sesion, esta en `docs/CESVIMA_CHECKPOINT_2026-10-26.md`.
+
+Ese registro deja J12, GoLLIE J15 y Gold C0/C1 sin PASS. J13 sigue sin autorizar. J21 no entra en `submit_train_first.sh`.
