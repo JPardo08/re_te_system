@@ -32,6 +32,11 @@ INSTALLED_EXTENSION_GLIBC_MAX = "2.32"
 EXPECTED_TORCH = "2.5.1+cu121"
 EXPECTED_TRANSFORMERS = "4.57.6"
 EXPECTED_BLACK = "24.10.0"
+# Versions read from the intact gollie-l40s stack. Their wheel files are not
+# assumed to be present in the CESVIMA pip cache.
+EXPECTED_TRITON = "3.1.0"
+EXPECTED_EINOPS = "0.8.2"
+EXPECTED_HUGGINGFACE_HUB = "0.36.2"
 
 GOLLIE_J16_DOWNLOAD_AUTHORIZED = False
 GOLLIE_J17_SMOKE_AUTHORIZED = False
