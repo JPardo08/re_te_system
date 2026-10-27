@@ -1,6 +1,7 @@
 #!/bin/bash
 # Create the UIE training venv only when it is absent.
-# An existing venv is reused unchanged. This script does not edit upstream code.
+# An existing venv is reused unchanged. Reuse does not authorize torch.load of
+# the origin pytorch_model.bin. This script does not edit upstream code.
 set -euo pipefail
 
 if [[ -x "${UIE_TRAIN_VENV}/bin/python" ]]; then

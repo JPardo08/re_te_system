@@ -9,6 +9,8 @@ import sys
 from pathlib import Path
 
 from cesvima_common import canonical_json, fail, sha256_file
+import uie_origin_pin as origin_pin
+from uie_safetensors_conversion import derived_provenance_accepted
 
 
 HASHED_UPSTREAM = (
@@ -35,7 +37,98 @@ def _version(distribution: str) -> str:
         return "MISSING"
 
 
-def build_fingerprint(uie_root: Path, shot_dir: Path) -> dict:
+def frozen_shot_identity(shot_dir: Path) -> dict:
+    files: dict[str, dict[str, object]] = {}
+    errors: list[str] = []
+    for name, expected in origin_pin.FROZEN_10SHOT_SHA256.items():
+        path = shot_dir / name
+        if not path.is_file():
+            errors.append(f"missing {name}")
+            continue
+        digest = sha256_file(path)
+        files[name] = {"matches_pin": digest == expected, "sha256": digest}
+        if digest != expected:
+            errors.append(f"hash mismatch {name}")
+    return {"errors": errors, "files": files, "ok": not errors}
+
+
+def derived_weight_identity(model_dir: Path | None, origin_dir: Path | None = None) -> dict:
+    """Identity of a safetensors sibling. A pickle in the directory is a refusal."""
+    errors: list[str] = []
+    files: dict[str, dict[str, object]] = {}
+    if model_dir is None:
+        return {"errors": ["derived model directory is absent"], "files": files, "ok": False}
+    if origin_dir is not None and model_dir.resolve() == origin_dir.resolve():
+        errors.append("derived directory is the origin snapshot")
+    if (model_dir / "pytorch_model.bin").is_file() or any(model_dir.glob("*.bin")):
+        errors.append("pickle weight is present")
+    safetensors = model_dir / "model.safetensors"
+    if not safetensors.is_file():
+        errors.append("model.safetensors is absent")
+    else:
+        files["model.safetensors"] = {
+            "sha256": sha256_file(safetensors),
+            "size": safetensors.stat().st_size,
+        }
+    return {"errors": errors, "files": files, "ok": not errors}
+
+
+def assess_preflight_inputs(
+    shot_dir: Path | None,
+    model_dir: Path | None,
+    origin_bin: Path | None,
+    origin_dir: Path | None = None,
+    provenance: dict | None = None,
+) -> dict:
+    shot = (
+        frozen_shot_identity(shot_dir)
+        if shot_dir is not None
+        else {"errors": ["shot directory is absent"], "files": {}, "ok": False}
+    )
+    derived = derived_weight_identity(model_dir, origin_dir)
+    origin = (
+        origin_pin.verify_origin_bin(origin_bin)
+        if origin_bin is not None
+        else {
+            "deserialization_authorized": False,
+            "matches_pin": False,
+            "observed": False,
+            "sha256": None,
+            "size": None,
+        }
+    )
+    errors = list(shot["errors"]) + list(derived["errors"])
+    provenance_verdict = derived_provenance_accepted(derived, provenance, origin)
+    if not provenance_verdict["accepted"]:
+        errors.append("derived provenance is not verified")
+    if not origin_pin.CONVERSION_ENABLED:
+        errors.append("safetensors conversion is disabled")
+    if not origin_pin.UIE_J12_DERIVED_LOAD_AUTHORIZED:
+        errors.append("J12 derived load is not authorized")
+    identity_ok = bool(derived["ok"])
+    return {
+        "derived": derived,
+        "derived_identity_ok": identity_ok,
+        "deserialization_authorized": origin_pin.deserialization_authorized(),
+        "errors": errors,
+        "origin": origin,
+        "provenance": provenance_verdict,
+        "ready": bool(
+            shot["ok"]
+            and identity_ok
+            and provenance_verdict["accepted"]
+            and origin_pin.CONVERSION_ENABLED
+            and origin_pin.UIE_J12_DERIVED_LOAD_AUTHORIZED
+        ),
+        "shot": shot,
+    }
+
+
+def build_fingerprint(uie_root: Path, shot_dir: Path, model_dir: Path) -> dict:
+    content = assess_preflight_inputs(shot_dir, model_dir, None)
+    problems = list(content["shot"]["errors"]) + list(content["derived"]["errors"])
+    if problems:
+        fail("fingerprint content is incomplete: " + "; ".join(problems))
     import torch
     import transformers
 
@@ -67,7 +160,11 @@ def build_fingerprint(uie_root: Path, shot_dir: Path) -> dict:
     return {
         "base_checkpoint_revision": "966f8b1fc4c74e94ab552081605913ad5133cc41",
         "cuda_device_name": device_name,
+        "derived_weight_hashes": content["derived"]["files"],
         "extra_packages": extra,
+        "frozen_10shot_hashes": {
+            name: item["sha256"] for name, item in content["shot"]["files"].items()
+        },
         "python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
         "script_hashes": hashes,
         "sentencepiece": _version("sentencepiece"),
