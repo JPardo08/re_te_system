@@ -102,9 +102,9 @@ J00 exige Python 3.12.3, torch 2.5.1+cu121, torch CUDA 12.1, transformers 4.57.6
 
 `/home/y064/SCRATCH/y064644/paper3/venvs/re_te_system_312` se conserva. No se usa para GPU por la incompatibilidad CUDA ya observada. J00 falla si el interprete sale de ese venv. No se borra.
 
-`uie-train` sigue siendo el venv de entrenamiento UIE, porque la compatibilidad del trainer upstream es un problema distinto del runtime de inferencia. `gollie-l40s` sigue siendo el venv de GoLLIE. Los dos viven bajo `SCRATCH_ROOT/venvs/`. El bootstrap los crea solo si `bin/python` no existe, usando el interprete de inferencia. Si el directorio ya existe, no reinstala. No hace `pip install` dentro de `re_te_system_gpu_312`. GoLLIE usa `PYTHONPATH=$SYSTEM_ROOT/src` en J17 para no instalar el paquete en editable dentro del repo.
+`uie-train` sigue siendo el venv de entrenamiento UIE, porque la compatibilidad del trainer upstream es un problema distinto del runtime de inferencia. `gollie-l40s` sigue siendo el venv de GoLLIE. Los dos viven bajo `SCRATCH_ROOT/venvs/`. El bootstrap de UIE crea `uie-train` solo si `bin/python` no existe. Reutilizar ese venv no autoriza a abrir `pytorch_model.bin` con `torch.load`. El bootstrap de GoLLIE ya no crea el venv y ya no compila: valida el entorno existente y sale en fallo si la extension instalada no acredita el wheel pineado. No hace `pip install` dentro de `re_te_system_gpu_312`. GoLLIE usa `PYTHONPATH=$SYSTEM_ROOT/src` en J17 para no instalar el paquete en editable dentro del repo.
 
-J15 compila `flash-attn` durante el bootstrap. Si `nvcc` no esta, el job falla. No se inventa un modulo Lmod de CUDA.
+J15 no compila `flash-attn`. El wheel preservado es `flash-attn==2.8.3.post2`, SHA-256 `8238e887fec100cbead2fb662a041bf8486499df00d8d026f234be3a7af2be82`. La comparacion observada de `flash_attn_2_cuda.cpython-312-x86_64-linux-gnu.so` es `BINARY_MISMATCH`: el paquete instalado no se trata como ese wheel, y ese resultado no es un veredicto de ABI. Si `nvcc` falta, no se inventa un modulo Lmod ni una compilacion de reemplazo.
 
 ## Gates
 
@@ -116,12 +116,12 @@ J15 compila `flash-attn` durante el bootstrap. Si `nvcc` no esta, el job falla. 
 - J07 usa el canonico Hohfeld de 36 documentos, en espanol y sin traducir. El manifiesto debe quedar en `CROSS_LINGUAL_DIAGNOSTIC`, `language_status=out_of_documented_language_scope` y `principal_ranking=excluded`. No entra en `--all`.
 - J09 FAIL si un hash no coincide con el manifiesto versionado. No copia los arboles ignorados de `_legacy`, aunque esos derivados existen localmente. La reconstruccion original se hizo con Python 3.8; aqui el interprete es el 3.12 verificado. Un mismatch de hash es un fallo cerrado.
 - J10 elige la primera linea de test cuyo texto no esta en train. Guarda identidad y SHA. No lee predicciones.
-- J12 FAIL ante cualquier excepcion de API. No parchea el trainer. Escribe `environment_fingerprint.json` y `preflight_report.json`.
-- J13 vuelve a calcular el fingerprint y aborta si difiere del de J12 o si J12 no esta en PASS. Solo acepta un directorio `seed1/10shot`. Si el directorio de salida ya tiene ficheros, aborta; un requeue no reanuda un entrenamiento a medias.
+- J12 no abre `pytorch_model.bin`. El pin de origen es SHA-256 `04baf49c28f4be89424f3a61dd30d674c4ab165ff16c1b007525829a8c9441f7` y 990285657 bytes; coincidir con ese pin no autoriza la deserializacion. La conversion a safetensors permanece deshabilitada. J12 escribe el informe en `uie/preflight/jobs/<SLURM_JOB_ID>/` y no reescribe `uie/preflight/preflight_report.json`. No parchea el trainer ni la puerta de seguridad de Transformers.
+- J13 rechaza un preflight fallido, incompleto o sin JOBID, y tambien un informe de otro JOBID. Aunque el informe estuviera completo, `UIE_J13_TRAINING_AUTHORIZED` permanece false y el entrenador no arranca. El recalculo del fingerprint, cuando esa autorizacion exista, sigue abortando si difiere del de J12. Solo acepta un directorio `seed1/10shot`. Si el directorio de salida ya tiene ficheros, aborta; un requeue no reanuda un entrenamiento a medias.
 - J14 PASS tecnico si `parsed_structures` no esta vacio y la procedencia del checkpoint no usa el SHA base como revision de los pesos. La recuperacion de la relacion gold se informa aparte y no decide ella sola el exit code. Si la estructura esta vacia, o si `resolved_revision` es `966f8b1fc4c74e94ab552081605913ad5133cc41`, el exit es distinto de cero.
-- J15 FAIL si no ve una L40S, si torch no es 2.5.1+cu121, si el matmul bfloat16 no es finito, si Black no esta en `>=24.8,<25`, si el kernel minimo de FlashAttention falla, si no puede importar solo `modeling_flash_llama.py`, o si SCRATCH tiene menos de 40 GiB libres. Esos 40 GiB son un umbral operativo: el unico dato de memoria sustanciado en el repo es 13477.10 MB de notebook, no un tamano hasheado del checkpoint 7B.
-- J16 no descarga si J15 no dejo `status=PASS` y `weights_downloaded=false`.
-- J17 PASS tecnico: cuatro artefactos, `inputs_succeeded==1`, revision `d3e41fef45f6a7d438c46ba7d9fce5d0d486c7a9`. Una generacion vacia no es, por si sola, el criterio de PASS.
+- J15 no alcanza `PREFLIGHT_PASS` mientras la identidad binaria no sea `MATCH`. Un `BINARY_MISMATCH` deja `abi_pass` en false y `abi_verdict` en `not_decided`. El informe va a `gollie/preflight/jobs/<SLURM_JOB_ID>/` e incluye el JOBID y el SHA-256 del wheel. El JSON antiguo `gollie/preflight_report.json` no se reescribe y no autoriza nada. Siguen vigentes la L40S, `torch==2.5.1+cu121`, el matmul bfloat16, Black `>=24.8,<25`, el kernel minimo y el import de `modeling_flash_llama.py`, pero solo despues de acreditar el binario. Esos 40 GiB libres siguen siendo un umbral operativo: el unico dato de memoria sustanciado en el repo es 13477.10 MB de notebook, no un tamano hasheado del checkpoint 7B.
+- J16 no descarga si el puntero de JOBID falta, si el informe es de otro JOBID, si el estado no es `PREFLIGHT_PASS`, si la identidad binaria no es `MATCH`, si faltan `BUILD_PASS` o `ABI_PASS`, o si `weights_downloaded` no es false. Con todo eso cumplido, `GOLLIE_J16_DOWNLOAD_AUTHORIZED` permanece false.
+- J17 sigue bloqueado: el script sale si `GOLLIE_J17_SMOKE_AUTHORIZED` no vale `1`, y `env.sh` no define esa variable. El criterio tecnico, cuando se abra, sigue siendo cuatro artefactos, `inputs_succeeded==1` y la revision `d3e41fef45f6a7d438c46ba7d9fce5d0d486c7a9`. Una generacion vacia no es, por si sola, el criterio de PASS.
 - J18 y J20 reutilizan el fichero si tamano y MD5 coinciden. Si el tamano no coincide, borran el parcial en SCRATCH y vuelven a descargar. No deserializan el checkpoint ni el zip.
 - Una licencia Hugging Face que responda 401 o 403 deja el job en fallo explicito. `HF_TOKEN`, si hace falta, sale del entorno. No se commitea.
 
@@ -160,10 +160,10 @@ Pesos, caches, runs y checkpoints van a SCRATCH. El prefijo de runs es `$SCRATCH
 | J09 | clones mas manifiesto versionado | datos reconstruidos bajo el clone en SCRATCH, `runs/p3/uie/rebuild_validation.json`, `shot_dir.txt` |
 | J10 | test y train 10-shot | `runs/p3/uie/smoke_example.json` |
 | J11 | `luyaojie/uie-base-en@966f8b1fc4c74e94ab552081605913ad5133cc41` | `runs/p3/uie/base_snapshot.json` |
-| J12 | base, 10-shot, clone | `runs/p3/uie/preflight/environment_fingerprint.json`, `preflight_report.json` |
-| J13 | fingerprint PASS y `train/val/test` seed1/10shot | `runs/p3/uie/train/seed1-10shot/`, `training_manifest.json` |
+| J12 | base pineada sin abrir el pickle, 10-shot, derivado safetensors aun no producido | `runs/p3/uie/preflight/jobs/<SLURM_JOB_ID>/preflight_report.json` |
+| J13 | fingerprint identificado y autorizacion explicita, hoy cerrada | `runs/p3/uie/train/seed1-10shot/`, `training_manifest.json` |
 | J14 | best checkpoint y ejemplo J10 | `runs/p3/uie/positive_smoke/` |
-| J15 | L40S, sin pesos 7B | `runs/p3/gollie/preflight_report.json` |
+| J15 | L40S, sin pesos 7B, sin compilacion | `runs/p3/gollie/preflight/jobs/<SLURM_JOB_ID>/preflight_report.json` |
 | J16 | `HiTZ/GoLLIE-7B@d3e41fef45f6a7d438c46ba7d9fce5d0d486c7a9` | `runs/p3/gollie/snapshot.json` |
 | J17 | fixtures `tests/fixtures/gollie/official_re_*` | `runs/p3/gollie/native-smoke/` |
 | J18 | Zenodo `genie_r.ckpt`, 4879373206 bytes, MD5 `c214da56b6e5d5bd259e0cbe826d92f7` | `models/genie/genie_r.ckpt` |
@@ -178,7 +178,7 @@ UIE de entrenamiento: epochs 200, batch 16, lr 1e-4, scheduler constant, warmup_
 
 Un checkpoint local afinado no recibe `--model-revision`. El CLI rechaza esa combinacion. `resolved_revision` pasa a ser `local-weights:` mas el SHA-256 del contenido de `config.json` y de los ficheros de pesos. `base_model_id` y `base_revision` conservan `luyaojie/uie-base-en` y `966f8b1fc4c74e94ab552081605913ad5133cc41` como procedencia del modelo base, no como revision de los pesos afinados. El registro incluye los hashes de los pesos y la identidad del training run (`output_dir`, metrica, SHA del manifiesto y metadatos SLURM). No se inventa una revision Git para esos pesos. Una carga hub de `uie-base-en` sigue resolviendo el SHA Git.
 
-El fingerprint incluye python, torch, CUDA de torch, transformers, sentencepiece, nombre del device CUDA, commit upstream de UIE, revision del checkpoint base, y hashes de scripts, config y del 10-shot. No incluye timestamp, hostname ni UUID de GPU.
+El fingerprint incluye python, torch, CUDA de torch, transformers, sentencepiece, nombre del device CUDA, commit upstream de UIE, revision del checkpoint base, hashes de scripts y config, los cuatro hashes del 10-shot frente al manifiesto, y el SHA-256 del `model.safetensors` derivado. No incluye timestamp, hostname ni UUID de GPU. No sustituye el `.bin` de origen por ese derivado: la conversion que produciria el safetensors esta deshabilitada.
 
 ## Criterios PASS y FAIL
 
@@ -223,6 +223,6 @@ C0 y C1 no estan en este DAG. Siguen sin backbone comun controlado, sin prompt c
 
 ## Checkpoint operativo 2026-10-26
 
-El DAG, los hashes y los gates de este documento siguen siendo el contrato de envio. La sesion del 26 de octubre no los sustituye. Lo observado ese dia, con jobs, la recuperacion de bytes UIE tras el fallo de J09 `1348833`, el smoke tecnico Qwen3 y los resultados que seguian abiertos al cerrar la sesion, esta en `docs/CESVIMA_CHECKPOINT_2026-10-26.md`.
+Lo observado el 26 de octubre, con jobs, la recuperacion de bytes UIE tras el fallo de J09 `1348833` y el smoke tecnico Qwen3, esta en `docs/CESVIMA_CHECKPOINT_2026-10-26.md`. Ese fichero no se reescribe. Los gates de este documento son el contrato vigente e incorporan la recuperacion EXP.4.5. J13, J16, J17 y Gold C0/C1 siguen sin autorizar. J21 no entra en `submit_train_first.sh`.
 
-Ese registro deja J12, GoLLIE J15 y Gold C0/C1 sin PASS. J13 sigue sin autorizar. J21 no entra en `submit_train_first.sh`.
+La recuperacion local posterior a ese checkpoint, con el pin del `.bin`, la extension FlashAttention anterior al wheel corregido y el procedimiento de sincronizacion que no se ejecuta desde aqui, esta en `docs/CESVIMA_EXP45_RECOVERY.md`. EXP.4.5.1 deja escrita la secuencia futura de ABI y kernel para GoLLIE, y la de conversion y J12 para UIE. Ninguna de esas fases esta activa. Ese procedimiento no autoriza J13, J16, J17 ni Gold C0/C1.
