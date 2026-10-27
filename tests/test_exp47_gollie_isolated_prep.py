@@ -131,7 +131,7 @@ def test_install_stays_closed_and_a_bad_hash_does_not_create_the_venv(tmp_path: 
     paths = _layout(tmp_path)
     refused = _run(["install"], _env(paths))
     assert refused.returncode == 1
-    assert "install is disabled" in refused.stderr
+    assert "R1 install is not authorized" in refused.stderr
     assert not paths["isolated"].exists()
     attempted = _run(["install"], _env(paths, GOLLIE_ISOLATED_INSTALL="1"), trace=True)
     assert attempted.returncode == 1
@@ -280,6 +280,8 @@ def test_r2_selects_the_isolated_venv_after_env_and_stays_out_of_the_submitter()
     assert source_at < isolated_at < selected_at
     assert text.index("assert-prep") < text.index("assert-modeling") < text.index("j15_gollie_preflight.py")
     assert "HF_HUB_OFFLINE=1" in text
+    assert "GOLLIE_R2_PREFLIGHT_AUTHORIZED=1" not in text
+    assert text.index("isolated J15 is not authorized") < source_at
     assert "unset GOLLIE_J17_SMOKE_AUTHORIZED" in text
     assert "GOLLIE_J17_SMOKE_AUTHORIZED=1" not in text
     assert all("pip install" not in line and not line.startswith("pip ") for line in executable)
@@ -300,7 +302,9 @@ def test_r2_selects_the_isolated_venv_after_env_and_stays_out_of_the_submitter()
     assert "pip install flash-attn" not in script
     assert "--system-site-packages" not in script
     assert "cp -a" not in script
-    assert script.index("--dry-run") < script.index("-m venv")
+    assert script.index("--dry-run") < script.index("--ignore-installed") < script.index("--only-binary=:all:")
+    assert "--no-index" in script
+    assert script.index("--ignore-installed") < script.index("-m venv")
     assert script.index("-m venv") < script.index("--no-deps")
     bootstrap_syntax = subprocess.run(["bash", "-n", str(BOOTSTRAP)], check=False)
     sbatch_syntax = subprocess.run(["bash", "-n", str(SBATCH)], check=False)

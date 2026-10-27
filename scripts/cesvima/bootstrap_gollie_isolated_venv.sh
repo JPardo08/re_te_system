@@ -195,12 +195,14 @@ inventory_main() {
 dry_run_stack() {
   env \
     PIP_NO_INDEX=1 \
+    PIP_NO_CACHE_DIR=1 \
     PIP_INDEX_URL= \
     PIP_EXTRA_INDEX_URL= \
     PIP_FIND_LINKS="${GOLLIE_WHEELHOUSE}" \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     "${GOLLIE_PYTHON312}" -m pip install \
       --dry-run \
+      --ignore-installed \
       --no-index \
       --find-links "${GOLLIE_WHEELHOUSE}" \
       --only-binary=:all: \
@@ -247,7 +249,15 @@ PY
   done <<< "${output}"
 }
 
+resolve_main() {
+  require_install_env
+  assert_isolated_path
+  load_pin_shell_vars
+  dry_run_stack
+}
+
 install_main() {
+  die "R1 install is not authorized"
   if [[ "${GOLLIE_ISOLATED_INSTALL:-}" != "1" ]]; then
     die "install is disabled; run inventory and set GOLLIE_ISOLATED_INSTALL=1 after the missing wheels are present"
   fi
@@ -441,14 +451,23 @@ print(f"LOCAL_MODELING {path}")
 PY
 }
 
+wheelhouse_main() {
+  require_runtime_env
+  "${GOLLIE_PYTHON312}" "${SCRIPT_DIR}/gollie_wheelhouse.py" "$@"
+}
+
 main() {
   local mode="${1:-inventory}"
   case "${mode}" in
     inventory) inventory_main ;;
+    resolve) resolve_main ;;
     install) install_main ;;
     assert-prep) assert_prep_main ;;
     assert-modeling) assert_modeling_main ;;
-    *) die "usage: bootstrap_gollie_isolated_venv.sh [inventory|install|assert-prep|assert-modeling]" ;;
+    missing|download-plan|download) wheelhouse_main "${mode}" ;;
+    # Manifest only. select-cache does not copy a wheelhouse and does not install.
+    select-cache) wheelhouse_main select-cache ;;
+    *) die "usage: bootstrap_gollie_isolated_venv.sh [inventory|resolve|install|assert-prep|assert-modeling|missing|download-plan|download|select-cache]" ;;
   esac
 }
 

@@ -12,6 +12,10 @@
 # Do not install packages and do not authorize J16 or J17.
 
 set -euo pipefail
+if [[ "${GOLLIE_R2_PREFLIGHT_AUTHORIZED:-}" != "1" ]]; then
+  echo "FAIL: isolated J15 is not authorized" >&2
+  exit 1
+fi
 source /home/y064/PROJECT/y064644/paper3/re_te_system/scripts/cesvima/env.sh
 original="${GOLLIE_VENV:-}"
 if [[ -z "${original}" ]]; then
