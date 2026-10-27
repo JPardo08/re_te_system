@@ -14,6 +14,7 @@ import io
 import json
 import os
 import re
+import shutil
 import sys
 import zipfile
 from pathlib import Path
@@ -30,7 +31,7 @@ from packaging.tags import (
     cpython_tags,
     parse_tag,
 )
-from packaging.utils import canonicalize_name, parse_wheel_filename
+from packaging.utils import InvalidWheelFilename, canonicalize_name, parse_wheel_filename
 from packaging.version import Version
 
 from flash_attn_pin import (
@@ -164,6 +165,13 @@ CESVIMA_SELECT_CACHE = {
     "selected": 7,
     "unpinned_observed": 77,
 }
+# Later CESVIMA select-cache, after the manylinux2014 tag correction.
+# Per-file hashes of this manifest were not copied into the repository.
+EXP472_MANIFEST_SHA256 = "7308b6ae7c4aa7df5a324b5e057c9c8f655ee958568cc8716e208ca3ebab8357"
+EXP472_MANIFEST_RELATIVE = Path("recovery") / "gollie-wheel-manifest-exp472-20261027.json"
+EXP472_SELECTED = 8
+EXP472_REJECTED = 20
+EXP472_AMBIGUOUS = 0
 
 # Official linux artifacts reported by PyPI JSON on 2026-10-27. The hash is
 # the index digest, not a hash recomputed from a local file.
@@ -244,6 +252,68 @@ OFFICIAL_LINUX_WHEELS = (
         "filename": "sympy-1.13.1-py3-none-any.whl",
         "sha256": "db36cdc64bf61b9b24578b6f7bab1ecdd2452cf008f34faa33776680c26d66f8",
         "url": "https://files.pythonhosted.org/packages/b2/fe/81695a1aa331a842b582453b605175f419fe8540355886031328089d840a/sympy-1.13.1-py3-none-any.whl",
+    },
+)
+
+# Digests read from package indexes on 2026-10-27. No wheel body was downloaded.
+# A cache file is accredited only when its recomputed SHA-256 equals one of these.
+PUBLISHED_CACHE_WHEELS = (
+    {
+        "filename": "torch-2.5.1+cu121-cp312-cp312-linux_x86_64.whl",
+        "name": "torch",
+        "provenance": "pytorch-cu121-simple-index-2026-10-27",
+        "sha256": "222be02548c2e74a21a8fbc8e5b8d2eef9f9faee865d70385d2eb1b9aabcbc76",
+        "url": "https://download-r2.pytorch.org/whl/cu121/torch-2.5.1%2Bcu121-cp312-cp312-linux_x86_64.whl#sha256=222be02548c2e74a21a8fbc8e5b8d2eef9f9faee865d70385d2eb1b9aabcbc76",
+        "version": "2.5.1+cu121",
+    },
+    {
+        "filename": "nvidia_cudnn_cu12-9.1.0.70-py3-none-manylinux2014_x86_64.whl",
+        "name": "nvidia-cudnn-cu12",
+        "provenance": "pypi-json-2026-10-27",
+        "sha256": "165764f44ef8c61fcdfdfdbe769d687e06374059fbb388b6c89ecb0e28793a6f",
+        "version": "9.1.0.70",
+    },
+    {
+        "filename": "transformers-4.57.6-py3-none-any.whl",
+        "name": "transformers",
+        "provenance": "pypi-json-2026-10-27",
+        "sha256": "4c9e9de11333ddfe5114bc872c9f370509198acf0b87a832a0ab9458e2bd0550",
+        "version": "4.57.6",
+    },
+    {
+        "filename": "black-24.10.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.manylinux_2_28_x86_64.whl",
+        "name": "black",
+        "provenance": "pypi-json-2026-10-27",
+        "sha256": "14b3502784f09ce2443830e3133dacf2c0110d45191ed470ecb04d0f5f6fcb0f",
+        "version": "24.10.0",
+    },
+    {
+        "filename": "black-24.10.0-py3-none-any.whl",
+        "name": "black",
+        "provenance": "pypi-json-2026-10-27",
+        "sha256": "3bb2b7a1f7b685f85b11fed1ef10f8a9148bceb49853e47a294a3dd963c1dd7d",
+        "version": "24.10.0",
+    },
+    {
+        "filename": "triton-3.1.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "name": "triton",
+        "provenance": "pypi-json-2026-10-27",
+        "sha256": "c8182f42fd8080a7d39d666814fa36c5e30cc00ea7eeeb1a2983dbb4c99a0fdc",
+        "version": "3.1.0",
+    },
+    {
+        "filename": "einops-0.8.2-py3-none-any.whl",
+        "name": "einops",
+        "provenance": "pypi-json-2026-10-27",
+        "sha256": "54058201ac7087911181bfec4af6091bb59380360f069276601256a76af08193",
+        "version": "0.8.2",
+    },
+    {
+        "filename": "huggingface_hub-0.36.2-py3-none-any.whl",
+        "name": "huggingface-hub",
+        "provenance": "pypi-json-2026-10-27",
+        "sha256": "48f0c8eac16145dfce371e9d2d7772854a4f591bcb56c9cf548accf531d54270",
+        "version": "0.36.2",
     },
 )
 
@@ -692,6 +762,276 @@ def stage_selected(cache: Path, records: list[dict[str, object]], destination: P
     raise RuntimeError("wheel materialization is not authorized")
 
 
+def _is_inside(root: Path, path: Path) -> bool:
+    resolved_root = root.resolve()
+    resolved = path.resolve()
+    return resolved == resolved_root or resolved_root in resolved.parents
+
+
+def published_wheels() -> tuple[dict[str, str], ...]:
+    """Official digests. The ten missing CUDA wheels stay in the download plan."""
+    combined = tuple(OFFICIAL_LINUX_WHEELS) + PUBLISHED_CACHE_WHEELS
+    seen: dict[str, str] = {}
+    for item in combined:
+        previous = seen.get(item["sha256"])
+        if previous is not None and previous != item["filename"]:
+            raise ValueError(f"published sha256 {item['sha256']} names two files")
+        seen[item["sha256"]] = item["filename"]
+        if "cu13" in item["filename"] or item["version"].startswith(("2.14", "3.8")):
+            raise ValueError(f"refusing incompatible published artifact {item['filename']}")
+    return combined
+
+
+def pending_dependencies() -> dict[str, object]:
+    """Versions that are still open. No version is chosen for the unpinned names."""
+    closure = prepared_closure()
+    return {
+        "closure_complete": False,
+        "exact_missing": closure["exact_missing"],
+        "reason": (
+            "The ten CUDA 12 wheels are not in a wheelhouse and an offline dry-run "
+            "has not succeeded."
+        ),
+        "unpinned": closure["unpinned"],
+        "version_not_accredited": [
+            {
+                "name": "setuptools",
+                "reason": (
+                    "torch 2.5.1+cu121 requires setuptools for Python >= 3.12 with no version. "
+                    "Its dependencies were not read."
+                ),
+            },
+            {
+                "name": "nvidia-nvjitlink-cu12",
+                "reason": (
+                    "nvidia-cusolver-cu12 11.4.5.107 and nvidia-cusparse-cu12 12.1.0.106 "
+                    "require nvidia-nvjitlink-cu12 with no version. Its dependencies were not read."
+                ),
+            },
+        ],
+    }
+
+
+def exp472_manifest_path(scratch: Path) -> Path:
+    return scratch / EXP472_MANIFEST_RELATIVE
+
+
+def assert_exp472_manifest_path(scratch: Path, manifest: Path) -> None:
+    expected = exp472_manifest_path(scratch)
+    if manifest.resolve() != expected.resolve():
+        raise ValueError(f"refusing manifest {manifest}; expected {expected}")
+
+
+def _blocked(record: dict[str, object], reason: str) -> dict[str, object]:
+    return {
+        "accredited": False,
+        "declared_name": record.get("declared_name"),
+        "declared_version": record.get("declared_version"),
+        "origin_path": record.get("origin_path"),
+        "reason": reason,
+        "sha256": record.get("sha256"),
+    }
+
+
+def _accredit_origin(
+    record: dict[str, object],
+    cache: Path,
+    published: tuple[dict[str, str], ...],
+) -> dict[str, object]:
+    """Re-read the cache body. ZIP names alone do not accredit it."""
+    origin_raw = record.get("origin_path")
+    recorded = record.get("sha256")
+    if not isinstance(origin_raw, str) or not isinstance(recorded, str):
+        return _blocked(record, "manifest record has no origin path or sha256")
+    origin = Path(origin_raw)
+    if origin.is_symlink() or not origin.is_file():
+        return _blocked(record, "origin is not a regular cache file")
+    if not _is_inside(cache, origin) or origin.resolve() == cache.resolve():
+        return _blocked(record, "origin is outside the pip cache")
+    before = origin.stat().st_mtime_ns
+    payload = origin.read_bytes()
+    if origin.stat().st_mtime_ns != before:
+        return _blocked(record, "cache file changed while reading")
+    digest = hashlib.sha256(payload).hexdigest()
+    if digest != recorded:
+        return _blocked(record, "recomputed sha256 does not match the manifest")
+    inspected = inspect_wheel_bytes(payload, origin.resolve())
+    if inspected.get("rejection"):
+        return _blocked(record, str(inspected["rejection"]))
+    if inspected.get("declared_name") != record.get("declared_name"):
+        return _blocked(record, "reparsed METADATA name does not match the manifest")
+    if inspected.get("declared_version") != record.get("declared_version"):
+        return _blocked(record, "reparsed METADATA version does not match the manifest")
+    if list(inspected.get("tags") or []) != list(record.get("tags") or []):
+        return _blocked(record, "reparsed WHEEL tags do not match the manifest")
+    tags = [str(tag) for tag in inspected["tags"]]
+    if not _tags_are_appropriate(tags):
+        return _blocked(record, "wheel tags are not appropriate for the cu121 cp312 runtime")
+    matches = [item for item in published if item["sha256"] == digest]
+    if not matches:
+        return _blocked(record, "no published sha256 matches this body")
+    if len(matches) != 1:
+        return _blocked(record, "published sha256 matches more than one official filename")
+    official = matches[0]
+    if canonicalize_name(official["name"]) != canonicalize_name(str(inspected["declared_name"])):
+        return _blocked(record, "published filename names a different distribution")
+    if Version(official["version"]) != Version(str(inspected["declared_version"])):
+        return _blocked(record, "published filename names a different version")
+    filename = official["filename"]
+    if Path(filename).name != filename:
+        return _blocked(record, "published filename is not a single path component")
+    try:
+        assert_wheel_filename_matches(
+            filename,
+            str(inspected["declared_name"]),
+            str(inspected["declared_version"]),
+            tags,
+        )
+    except (InvalidWheelFilename, ValueError) as exc:
+        return _blocked(record, f"published filename does not match metadata and tags: {exc}")
+    return {
+        "accredited": True,
+        "declared_name": inspected["declared_name"],
+        "declared_version": inspected["declared_version"],
+        "filename": filename,
+        "origin_mtime_ns": before,
+        "origin_path": str(origin.resolve()),
+        "provenance": official.get("provenance", "published-sha256"),
+        "sha256": digest,
+    }
+
+
+def _load_selection_manifest(manifest: Path, expected_sha256: str) -> dict[str, object]:
+    payload = manifest.read_bytes()
+    digest = hashlib.sha256(payload).hexdigest()
+    if digest != expected_sha256:
+        raise ValueError(f"manifest sha256 {digest} != {expected_sha256}")
+    parsed = json.loads(payload)
+    if not isinstance(parsed, dict):
+        raise ValueError("manifest is not a JSON object")
+    if expected_sha256 == EXP472_MANIFEST_SHA256:
+        selected = parsed.get("selected")
+        rejected = parsed.get("rejected")
+        ambiguous = parsed.get("ambiguous")
+        if not isinstance(selected, list) or len(selected) != EXP472_SELECTED:
+            raise ValueError("EXP.4.7.2 manifest does not contain 8 selected records")
+        if not isinstance(rejected, list) or len(rejected) != EXP472_REJECTED:
+            raise ValueError("EXP.4.7.2 manifest does not contain 20 rejected records")
+        if not isinstance(ambiguous, list) or len(ambiguous) != EXP472_AMBIGUOUS:
+            raise ValueError("EXP.4.7.2 manifest does not contain 0 ambiguous records")
+        if parsed.get("materialized") is not False or parsed.get("installable_wheelhouse") is not False:
+            raise ValueError("EXP.4.7.2 manifest is not an unmaterialized selection")
+    return parsed
+
+
+def materialize_accredited(
+    manifest: Path,
+    cache: Path,
+    destination: Path,
+    *,
+    authorized: bool,
+    expected_sha256: str,
+    scratch_root: Path,
+    published: tuple[dict[str, str], ...] | None = None,
+) -> dict[str, object]:
+    """Copy accredited cache bodies into a new SCRATCH directory.
+
+    The cache is only read. An existing destination is refused. The resulting
+    directory is not an installable closure: the ten CUDA 12 wheels are still
+    absent and no offline dry-run has succeeded.
+    """
+    if authorized is not True:
+        raise RuntimeError("wheel materialization is not authorized")
+    if not manifest_path_is_outside_cache(cache, destination):
+        raise ValueError("refusing to write the wheelhouse inside the pip cache")
+    if destination.exists() or destination.is_symlink():
+        raise ValueError("refusing to write into an existing directory")
+    if not _is_inside(scratch_root, destination) or destination.resolve() == scratch_root.resolve():
+        raise ValueError("wheelhouse must be a new directory inside SCRATCH_ROOT")
+    forbidden = {"gollie-l40s", "gollie-isolated", "uie-train", "re_te_system_gpu_312", "re_te_system_312"}
+    if forbidden & set(destination.resolve().parts):
+        raise ValueError("refusing to write inside a venv path")
+    catalog = published_wheels() if published is None else published
+    selection = _load_selection_manifest(manifest, expected_sha256)
+    selected = selection.get("selected")
+    if not isinstance(selected, list):
+        raise ValueError("manifest has no selected list")
+    accredited = []
+    blocked = []
+    for record in selected:
+        if not isinstance(record, dict):
+            blocked.append(_blocked({}, "selected entry is not an object"))
+            continue
+        if record.get("status") != "SELECTED_CANDIDATE":
+            blocked.append(_blocked(record, "record is not a selected candidate"))
+            continue
+        decision = _accredit_origin(record, cache, catalog)
+        if decision["accredited"] is True:
+            accredited.append(decision)
+        else:
+            blocked.append(decision)
+    filenames = [str(item["filename"]) for item in accredited]
+    if len(filenames) != len(set(filenames)):
+        raise ValueError("accredited wheel filenames collide")
+    pending = pending_dependencies()
+    report: dict[str, object] = {
+        "blocked": blocked,
+        "closure_complete": False,
+        "copied": [],
+        "download_authorized": False,
+        "installable_wheelhouse": False,
+        "materialized": False,
+        "pending": pending,
+    }
+    if not accredited:
+        return report
+    created = False
+    try:
+        destination.mkdir(parents=False, exist_ok=False)
+        created = True
+        copied = []
+        for item in accredited:
+            filename = str(item["filename"])
+            target = destination / filename
+            if target.exists():
+                raise ValueError(f"refusing to overwrite {target}")
+            origin = Path(str(item["origin_path"]))
+            before = origin.stat().st_mtime_ns
+            if before != item["origin_mtime_ns"]:
+                raise ValueError(f"cache file changed before copy: {origin}")
+            payload = origin.read_bytes()
+            digest = hashlib.sha256(payload).hexdigest()
+            if digest != item["sha256"]:
+                raise ValueError(f"sha256 changed before copy: {origin}")
+            with target.open("xb") as handle:
+                handle.write(payload)
+            if hashlib.sha256(target.read_bytes()).hexdigest() != digest:
+                raise ValueError(f"sha256 mismatch after copy: {target}")
+            if origin.stat().st_mtime_ns != before:
+                raise ValueError(f"cache file was modified: {origin}")
+            copied.append(
+                {
+                    "filename": filename,
+                    "origin_path": str(origin),
+                    "provenance": item["provenance"],
+                    "sha256": digest,
+                }
+            )
+        sums = "".join(f"{item['sha256']}  {item['filename']}\n" for item in copied)
+        (destination / "SHA256SUMS").write_text(sums, encoding="utf-8")
+        report["copied"] = copied
+        report["materialized"] = True
+        (destination / "materialization.json").write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        if created:
+            shutil.rmtree(destination)
+        raise
+    return report
+
+
 def download_plan() -> dict[str, object]:
     closure = prepared_closure()
     missing = {(item["name"], item["version"]) for item in closure["exact_missing"]}
@@ -739,6 +1079,25 @@ def main(argv: list[str] | None = None) -> int:
     if args == ["download"]:
         fetch_planned_wheels()
         return 1
+    if args == ["materialize"]:
+        if os.environ.get("GOLLIE_MATERIALIZE_AUTHORIZED") != "1":
+            raise RuntimeError("wheel materialization is not authorized")
+        scratch = Path(os.environ["SCRATCH_ROOT"])
+        cache = Path(os.environ["GOLLIE_PIP_HTTP_CACHE"])
+        manifest = Path(os.environ["GOLLIE_WHEEL_MANIFEST"])
+        destination = Path(os.environ["GOLLIE_WHEELHOUSE"])
+        assert_exp472_manifest_path(scratch, manifest)
+        _emit(
+            materialize_accredited(
+                manifest,
+                cache,
+                destination,
+                authorized=True,
+                expected_sha256=EXP472_MANIFEST_SHA256,
+                scratch_root=scratch,
+            )
+        )
+        return 0
     if args == ["select-cache"]:
         cache = Path(os.environ["GOLLIE_PIP_HTTP_CACHE"])
         manifest = Path(os.environ["GOLLIE_WHEEL_MANIFEST"])
@@ -754,7 +1113,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"WHEEL_MANIFEST {manifest}")
         return 0
     print(
-        "usage: gollie_wheelhouse.py [missing|download-plan|download|select-cache]",
+        "usage: gollie_wheelhouse.py [missing|download-plan|download|select-cache|materialize]",
         file=sys.stderr,
     )
     return 1

@@ -467,7 +467,14 @@ main() {
     missing|download-plan|download) wheelhouse_main "${mode}" ;;
     # Manifest only. select-cache does not copy a wheelhouse and does not install.
     select-cache) wheelhouse_main select-cache ;;
-    *) die "usage: bootstrap_gollie_isolated_venv.sh [inventory|resolve|install|assert-prep|assert-modeling|missing|download-plan|download|select-cache]" ;;
+    # Copy only. Requires GOLLIE_MATERIALIZE_AUTHORIZED=1 and does not install.
+    materialize)
+      if [[ "${GOLLIE_MATERIALIZE_AUTHORIZED:-}" != "1" ]]; then
+        die "wheel materialization is not authorized"
+      fi
+      wheelhouse_main materialize
+      ;;
+    *) die "usage: bootstrap_gollie_isolated_venv.sh [inventory|resolve|install|assert-prep|assert-modeling|missing|download-plan|download|select-cache|materialize]" ;;
   esac
 }
 
