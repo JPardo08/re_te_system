@@ -8,7 +8,13 @@ import os
 import shutil
 from pathlib import Path
 
-from cesvima_common import fail, require_cuda_family, write_json
+from cesvima_common import fail, require_cuda_family
+from gollie_environment import (
+    build_preflight_report,
+    probe_installed_environment,
+    write_accepted_pointer,
+    write_job_report,
+)
 
 
 GOLLIE_REPO = "HiTZ/GoLLIE-7B"
@@ -68,7 +74,14 @@ def _import_modeling() -> str:
     return str(path)
 
 
-def main() -> int:
+def _job_id() -> str:
+    job_id = os.environ.get("SLURM_JOB_ID", "").strip()
+    if not job_id or job_id in {".", ".."} or "/" in job_id or "\\" in job_id:
+        fail("J15 requires a single-path-segment SLURM_JOB_ID")
+    return job_id
+
+
+def _kernel_observation() -> dict[str, object]:
     import torch
 
     device_name = require_cuda_family("L40S")
@@ -84,21 +97,56 @@ def main() -> int:
     usage = shutil.disk_usage(os.environ["SCRATCH_ROOT"])
     if usage.free < FREE_BYTES:
         fail(f"SCRATCH free space {usage.free} bytes is below {FREE_BYTES}")
-    report = Path(os.environ["P3_RUNS_ROOT"]) / "gollie" / "preflight_report.json"
-    write_json(
-        report,
-        {
-            "black": black_version,
-            "cuda_device_name": device_name,
-            "free_bytes": usage.free,
-            "modeling_file": modeling_path,
-            "status": "PASS",
-            "torch": torch.__version__,
-            "torch_cuda": cuda,
-            "weights_downloaded": False,
-        },
+    return {
+        "black": black_version,
+        "cuda_device_name": device_name,
+        "free_bytes": usage.free,
+        "modeling_file": modeling_path,
+        "torch": torch.__version__,
+        "torch_cuda": cuda,
+    }
+
+
+def main() -> int:
+    job_id = _job_id()
+    runs = Path(os.environ["P3_RUNS_ROOT"])
+    node = os.environ.get("SLURMD_NODENAME") or None
+    assessment = probe_installed_environment()
+    if assessment["accredited_for_reuse"] is not True:
+        report = build_preflight_report(
+            assessment,
+            job_id=job_id,
+            node=node,
+            kernel_finite=None,
+        )
+        write_job_report(runs, job_id, report)
+        print(f"BLOCKED_BINARY_IDENTITY {assessment['binary_identity']}", flush=True)
+        return 2
+    if assessment["abi_pass"] is not True:
+        report = build_preflight_report(
+            assessment,
+            job_id=job_id,
+            node=node,
+            kernel_finite=None,
+        )
+        write_job_report(runs, job_id, report)
+        print(f"BLOCKED_ABI abi_verdict={assessment['abi_verdict']}", flush=True)
+        return 2
+    observed = _kernel_observation()
+    report = build_preflight_report(
+        assessment,
+        job_id=job_id,
+        node=node,
+        kernel_finite=True,
+        kernel_device_family="L40S",
     )
-    print("PASS J15 GoLLIE preflight", flush=True)
+    report.update(observed)
+    write_job_report(runs, job_id, report)
+    if report["preflight_pass"] is not True:
+        print("KERNEL_OBSERVED J15 preflight_pass=false", flush=True)
+        return 2
+    write_accepted_pointer(runs, job_id)
+    print("KERNEL_OBSERVED J15 preflight_pass=true", flush=True)
     return 0
 
 

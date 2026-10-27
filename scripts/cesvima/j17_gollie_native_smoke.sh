@@ -3,6 +3,10 @@
 set -euo pipefail
 
 export PYTHONPATH="${SYSTEM_ROOT}/scripts/cesvima:${SYSTEM_ROOT}/src"
+if [[ "${GOLLIE_J17_SMOKE_AUTHORIZED:-}" != "1" ]]; then
+  echo "FAIL: J17 native smoke is not authorized" >&2
+  exit 1
+fi
 PYTHON="${GOLLIE_VENV}/bin/python"
 OUTPUT_ROOT="${P3_RUNS_ROOT}/gollie/native-smoke"
 mkdir -p "${OUTPUT_ROOT}"

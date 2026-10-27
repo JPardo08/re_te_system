@@ -1,27 +1,29 @@
 #!/bin/bash
-# Create the GoLLIE L40S venv only when it is absent.
-# flash-attn is installed here. GoLLIE-7B weights are not downloaded here.
+# Validate the existing gollie-l40s environment.
+# Do not create the venv, do not pip install, and do not compile flash-attn.
+# Exit 0 only when the installed extension is accredited as the pinned wheel.
+# Exit 2 when the venv exists but identity or versions are not accredited.
 set -euo pipefail
 
-if [[ -x "${GOLLIE_VENV}/bin/python" ]]; then
-  echo "PASS reuse ${GOLLIE_VENV}"
-  exit 0
-fi
-if [[ ! -x "${INFER_VENV}/bin/python" ]]; then
-  echo "FAIL: inference venv is missing at ${INFER_VENV}" >&2
+if [[ -n "${GOLLIE_BOOTSTRAP_ALLOW_COMPILE:-}" ]]; then
+  echo "FAIL: FlashAttention compilation is forbidden" >&2
   exit 1
 fi
-echo "CREATE ${GOLLIE_VENV}"
-"${INFER_VENV}/bin/python" -m venv "${GOLLIE_VENV}"
-"${GOLLIE_VENV}/bin/python" -m pip install --upgrade pip
-"${GOLLIE_VENV}/bin/python" -m pip install \
-  "torch==2.5.1" \
-  --index-url https://download.pytorch.org/whl/cu121
-"${GOLLIE_VENV}/bin/python" -m pip install \
-  "transformers==4.57.6" \
-  "black>=24.8,<25" \
-  "sentencepiece>=0.2,<0.3" \
-  "huggingface_hub" \
-  "packaging"
-"${GOLLIE_VENV}/bin/python" -m pip install "flash-attn" --no-build-isolation
-echo "PASS created ${GOLLIE_VENV}"
+if [[ -z "${GOLLIE_VENV:-}" || ! -x "${GOLLIE_VENV}/bin/python" ]]; then
+  echo "FAIL: existing gollie-l40s is required; refusing to create a venv or compile" >&2
+  exit 1
+fi
+if [[ -z "${SYSTEM_ROOT:-}" ]]; then
+  echo "FAIL: SYSTEM_ROOT is required" >&2
+  exit 1
+fi
+export PYTHONPATH="${SYSTEM_ROOT}/scripts/cesvima${PYTHONPATH:+:${PYTHONPATH}}"
+set +e
+"${GOLLIE_VENV}/bin/python" "${SYSTEM_ROOT}/scripts/cesvima/gollie_environment.py" --assess
+status=$?
+set -e
+if [[ "${status}" -eq 0 || "${status}" -eq 2 ]]; then
+  exit "${status}"
+fi
+echo "FAIL: gollie environment assessment exited ${status}" >&2
+exit "${status}"
