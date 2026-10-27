@@ -12,11 +12,15 @@
 # Do not install packages and do not authorize J16 or J17.
 
 set -euo pipefail
-if [[ "${GOLLIE_R2_PREFLIGHT_AUTHORIZED:-}" != "1" ]]; then
+saved_r2="${GOLLIE_R2_PREFLIGHT_AUTHORIZED:-}"
+saved_wheel="${GOLLIE_FLASH_ATTN_WHEEL:-}"
+if [[ "${saved_r2}" != "1" ]]; then
   echo "FAIL: isolated J15 is not authorized" >&2
   exit 1
 fi
 source /home/y064/PROJECT/y064644/paper3/re_te_system/scripts/cesvima/env.sh
+export GOLLIE_R2_PREFLIGHT_AUTHORIZED="${saved_r2}"
+export GOLLIE_FLASH_ATTN_WHEEL="${saved_wheel}"
 original="${GOLLIE_VENV:-}"
 if [[ -z "${original}" ]]; then
   echo "FAIL: env.sh did not set GOLLIE_VENV" >&2

@@ -21,8 +21,8 @@ require_common() {
   if [[ -n "${GOLLIE_BOOTSTRAP_ALLOW_COMPILE:-}" ]]; then
     die "FlashAttention compilation is forbidden"
   fi
-  if [[ -z "${SCRATCH_ROOT:-}" || -z "${SYSTEM_ROOT:-}" || -z "${GOLLIE_PYTHON312:-}" ]]; then
-    die "SCRATCH_ROOT, SYSTEM_ROOT and GOLLIE_PYTHON312 are required"
+  if [[ -z "${SCRATCH_ROOT:-}" || -z "${SYSTEM_ROOT:-}" ]]; then
+    die "SCRATCH_ROOT and SYSTEM_ROOT are required"
   fi
   if [[ -z "${GOLLIE_WHEELHOUSE:-}" || -z "${GOLLIE_ISOLATED_VENV:-}" || -z "${GOLLIE_FLASH_ATTN_WHEEL:-}" ]]; then
     die "GOLLIE_WHEELHOUSE, GOLLIE_ISOLATED_VENV and GOLLIE_FLASH_ATTN_WHEEL are required"
@@ -41,6 +41,9 @@ require_common() {
   # shellcheck disable=SC1091
   source "${BOOTSTRAP}"
   resolve_gollie_creator
+  if [[ -z "${GOLLIE_PYTHON312:-}" || ! -x "${GOLLIE_PYTHON312}" ]]; then
+    die "GOLLIE_PYTHON312 must be an executable Python 3.12 interpreter"
+  fi
 }
 
 prepare_main() {

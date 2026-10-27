@@ -275,3 +275,60 @@ def test_creator_prefers_the_pyvenv_home_and_can_fall_back_to_gollie_l40s(tmp_pa
     assert fallback.returncode == 0
     assert fallback.stdout.strip().splitlines()[-1] == str(original / "bin" / "python")
     assert marker.read_text(encoding="utf-8") == "untouched"
+
+
+def test_go_resolves_an_absent_interpreter_before_requiring_it(tmp_path: Path) -> None:
+    scratch = tmp_path / "scratch"
+    original = scratch / "venvs" / "gollie-l40s"
+    (original / "bin").mkdir(parents=True)
+    marker = original / "MARKER"
+    marker.write_text("untouched", encoding="utf-8")
+    os.symlink(PYTHON, original / "bin" / "python")
+    home = tmp_path / "base" / "bin"
+    home.mkdir(parents=True)
+    os.symlink(PYTHON, home / "python3.12")
+    (original / "pyvenv.cfg").write_text(
+        f"home = {home}\ninclude-system-site-packages = false\n",
+        encoding="utf-8",
+    )
+    wheelhouse = scratch / "recovery" / "gollie-wheelhouse-exp49"
+    wheelhouse.mkdir(parents=True)
+    env = os.environ.copy()
+    env.pop("GOLLIE_PYTHON312", None)
+    env.pop("GOLLIE_DOWNLOAD_AUTHORIZED", None)
+    env.update(
+        {
+            "SCRATCH_ROOT": str(scratch),
+            "SYSTEM_ROOT": str(ROOT),
+            "GOLLIE_WHEELHOUSE": str(wheelhouse),
+            "GOLLIE_ISOLATED_VENV": str(scratch / "venvs" / "gollie-isolated"),
+            "GOLLIE_ORIGINAL_VENV": str(original),
+            "GOLLIE_FLASH_ATTN_WHEEL": str(scratch / "flash.whl"),
+        }
+    )
+    preferred = subprocess.run(
+        ["bash", str(GO), "prepare"],
+        text=True,
+        capture_output=True,
+        check=False,
+        env=env,
+    )
+    assert preferred.returncode == 1
+    assert "wheel download is not authorized" in preferred.stderr
+    assert "GOLLIE_PYTHON312 are required" not in preferred.stderr
+    assert f"CREATOR {home / 'python3.12'}" in preferred.stdout
+    assert not (wheelhouse / "wheelhouse-close.json").exists()
+    (original / "pyvenv.cfg").unlink()
+    fallback = subprocess.run(
+        ["bash", str(GO), "prepare"],
+        text=True,
+        capture_output=True,
+        check=False,
+        env=env,
+    )
+    assert fallback.returncode == 1
+    assert "wheel download is not authorized" in fallback.stderr
+    assert "GOLLIE_PYTHON312 are required" not in fallback.stderr
+    assert f"CREATOR {original / 'bin' / 'python'}" in fallback.stdout
+    assert marker.read_text(encoding="utf-8") == "untouched"
+    assert not (scratch / "venvs" / "gollie-isolated").exists()
