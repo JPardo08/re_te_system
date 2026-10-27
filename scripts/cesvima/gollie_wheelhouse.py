@@ -8,10 +8,12 @@ recomputed on the downloaded bytes before a wheel may enter the wheelhouse.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import io
 import json
 import os
+import re
 import sys
 import zipfile
 from pathlib import Path
@@ -19,7 +21,17 @@ from pathlib import Path
 from packaging.markers import default_environment
 from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet
-from packaging.utils import canonicalize_name
+from packaging.tags import (
+    InvalidTag,
+    Tag,
+    TooManyTagsError,
+    UnsortedTagsError,
+    compatible_tags,
+    cpython_tags,
+    parse_tag,
+)
+from packaging.utils import canonicalize_name, parse_wheel_filename
+from packaging.version import Version
 
 from flash_attn_pin import (
     EXPECTED_BLACK,
@@ -33,6 +45,11 @@ from flash_attn_pin import (
 
 ZIP_MAGIC = b"PK\x03\x04"
 DOWNLOAD_AUTHORIZED = False
+MATERIALIZATION_AUTHORIZED = False
+# CPython 3.12 on Linux x86_64. manylinux tags stop at glibc 2.28.
+TARGET_PYTHON = (3, 12)
+TARGET_ARCH = "x86_64"
+TARGET_GLIBC = (2, 28)
 
 # Requires-Dist read from the official file
 # torch-2.5.1+cu121-cp312-cp312-linux_x86_64.whl. The PyPI project metadata
@@ -113,6 +130,39 @@ CACHE_EXACT_AVAILABLE = {
 # The inventory did not provide a path, tag, file count, or sha256.
 CESVIMA_NAMED_CACHE_VERSIONS = {
     "sympy": ("1.13.1", "1.14.0"),
+}
+# Counts and hashes reported by the CESVIMA select-cache run. This machine
+# did not re-read that cache. The other six selected names were not reported.
+CESVIMA_SELECT_CACHE = {
+    "ambiguous": 0,
+    "exit_code": 0,
+    "installable_wheelhouse": False,
+    "manifest_sha256": "e73bc2dc212fb31324eb0b07c4f1c9e0dfeb0f078d783dd4fafcb0ba23883fe0",
+    "materialized": False,
+    "provenance_accredited": False,
+    "records": (
+        {
+            "measured_sha256": "db36cdc64bf61b9b24578b6f7bab1ecdd2452cf008f34faa33776680c26d66f8",
+            "name": "sympy",
+            "outcome": "SELECTED_CANDIDATE",
+            "provenance_accredited": False,
+            "version": "1.13.1",
+        },
+        {
+            "measured_sha256": "165764f44ef8c61fcdfdfdbe769d687e06374059fbb388b6c89ecb0e28793a6f",
+            "name": "nvidia-cudnn-cu12",
+            "outcome": "REJECTED",
+            "provenance_accredited": False,
+            "tag": "py3-none-manylinux2014_x86_64",
+            "version": "9.1.0.70",
+        },
+        {"name": "sympy", "outcome": "REJECTED", "version": "1.14.0"},
+        {"name": "torch", "outcome": "REJECTED", "version": "2.14"},
+        {"name": "triton", "outcome": "REJECTED", "version": "3.8"},
+    ),
+    "rejected": 21,
+    "selected": 7,
+    "unpinned_observed": 77,
 }
 
 # Official linux artifacts reported by PyPI JSON on 2026-10-27. The hash is
@@ -291,18 +341,28 @@ def build_closure(metadata_by_name: dict[str, str]) -> dict[str, object]:
             findings.append(
                 {
                     "accreditation": "NOT_ACCREDITED",
+                    "evidence": "static_version_list",
                     "name": name,
                     "reason": (
-                        "CESVIMA inventory of pip-cache/http-v2 named this version. "
-                        "Path, tag, zip integrity and sha256 were not observed, "
-                        "so the package is not MISSING and is not accredited."
+                        "Earlier CESVIMA inventory of pip-cache/http-v2 named this version. "
+                        "This entry records that version. It is not a select-cache candidate "
+                        "and it does not carry the hash measured later."
                     ),
-                    "status": "PRESENT_IN_CACHE",
+                    "selected_candidate": False,
+                    "status": "VERSION_OBSERVED",
                     "version": version,
                 }
             )
             continue
-        missing.append({"name": name, "status": "MISSING", "version": version})
+        missing.append(
+            {
+                "evidence": "static_version_list",
+                "name": name,
+                "selected_candidate": False,
+                "status": "MISSING",
+                "version": version,
+            }
+        )
     for name, versions in sorted(named.items()):
         required = exact.get(name)
         for version in versions:
@@ -321,11 +381,25 @@ def build_closure(metadata_by_name: dict[str, str]) -> dict[str, object]:
                 }
             )
     return {
-        "available_exact": [{"name": name, "version": version} for name, version in sorted(available.items())],
+        "available_exact": [
+            {
+                "evidence": "static_version_list",
+                "name": name,
+                "selected_candidate": False,
+                "status": "VERSION_OBSERVED",
+                "version": version,
+            }
+            for name, version in sorted(available.items())
+        ],
         "cache_findings": findings,
+        "cesvima_select_cache": CESVIMA_SELECT_CACHE,
+        "evidence": "static_version_list",
         "exact_missing": missing,
         "exact_required": [{"name": name, "version": version} for name, version in sorted(exact.items())],
+        "installable_wheelhouse": False,
+        "materialized": False,
         "provenance_accredited": False,
+        "selection_executed": False,
         "source": "torch 2.5.1+cu121 wheel METADATA plus PyPI requires_dist of the named stack; not the CUDA 12.4 pins of PyPI torch 2.5.1",
         "unpinned": [{"name": name, "specifier": spec} for name, spec in sorted(unpinned.items())],
     }
@@ -337,7 +411,7 @@ def prepared_closure() -> dict[str, object]:
 
 def _allowed_exact() -> dict[str, str]:
     closure = prepared_closure()
-    return {item["name"]: item["version"] for item in closure["exact_required"]}
+    return {str(item["name"]): str(item["version"]) for item in closure["exact_required"]}
 
 
 def _rejection(name: str, version: str) -> str | None:
@@ -420,17 +494,49 @@ def inspect_wheel_bytes(payload: bytes, origin: Path) -> dict[str, object]:
     return record
 
 
+def _glibc_platforms(glibc: tuple[int, int], arch: str) -> tuple[str, ...]:
+    """manylinux tags for one glibc ceiling. Does not read the host platform.
+
+    The descent matches packaging's manylinux generator: current glibc down to
+    2.5 on x86_64, with the legacy manylinux2014, manylinux2010 and manylinux1
+    aliases. A tag that requires a newer glibc is absent.
+    """
+    legacy = {(2, 17): "manylinux2014", (2, 12): "manylinux2010", (2, 5): "manylinux1"}
+    oldest_minor = 4 if arch in {"x86_64", "i686"} else 16
+    platforms = [f"linux_{arch}"]
+    for minor in range(glibc[1], oldest_minor, -1):
+        platforms.append(f"manylinux_{glibc[0]}_{minor}_{arch}")
+        alias = legacy.get((glibc[0], minor))
+        if alias is not None:
+            platforms.append(f"{alias}_{arch}")
+    return tuple(platforms)
+
+
+@functools.lru_cache(maxsize=1)
+def target_tag_set() -> frozenset[Tag]:
+    """Tags installable by CPython 3.12 on Linux x86_64 with glibc 2.28."""
+    platforms = _glibc_platforms(TARGET_GLIBC, TARGET_ARCH)
+    found = set(cpython_tags(python_version=TARGET_PYTHON, abis=["cp312"], platforms=platforms))
+    found.update(
+        compatible_tags(python_version=TARGET_PYTHON, interpreter="cp312", platforms=platforms)
+    )
+    return frozenset(found)
+
+
 def _tags_are_appropriate(tags: list[str]) -> bool:
-    """py3-none-any is the tag of the pure SymPy wheel. cp312 linux x86_64 is the binary tag."""
-    for tag in tags:
-        lowered = tag.lower()
-        if any(token in lowered for token in ("macosx", "win32", "win_amd64", "aarch64", "arm64", "i686", "cu13")):
-            continue
-        if lowered in {"py3-none-any", "py2.py3-none-any"}:
-            return True
-        if "cp312" in lowered and "x86_64" in lowered and ("manylinux" in lowered or "linux_" in lowered):
-            return True
-    return False
+    """True when one wheel tag is in the simulated cp312 linux x86_64 set."""
+    if not tags:
+        return False
+    accepted = target_tag_set()
+    matched = False
+    for raw in tags:
+        try:
+            parsed = parse_tag(raw)
+        except (InvalidTag, TooManyTagsError, UnsortedTagsError, ValueError):
+            return False
+        if parsed & accepted:
+            matched = True
+    return matched
 
 
 def iter_cache_bodies(cache: Path) -> list[Path]:
@@ -489,8 +595,11 @@ def select_records(records: list[dict[str, object]]) -> dict[str, object]:
             ambiguous.append(record)
             ambiguous.append(selected.pop(key))
             continue
-        record["status"] = "PRESENT_IN_CACHE"
+        record["status"] = "SELECTED_CANDIDATE"
         record["accreditation"] = "NOT_ACCREDITED"
+        record["filename_provenance_accredited"] = False
+        record["hash_evidence"] = "measured"
+        record["selected_candidate"] = True
         selected[key] = record
     return {
         "ambiguous": ambiguous,
@@ -507,28 +616,80 @@ def manifest_path_is_outside_cache(cache: Path, manifest: Path) -> bool:
     return target != cache_root and cache_root not in target.parents
 
 
-def stage_selected(cache: Path, records: list[dict[str, object]], destination: Path) -> list[Path]:
-    """Copy selected bytes outside the cache. select-cache does not call this.
+def _distribution_file_name(name: str) -> str:
+    return re.sub(r"[-_.]+", "_", name).lower()
 
-    Materialization is not a bootstrap mode and has not been executed.
+
+def candidate_wheel_filename(name: str, version: str, tags: list[str]) -> str:
+    """PEP 427 filename. A cache hash is not a wheel name."""
+    if not tags:
+        raise ValueError("wheel tags are required to name a wheel")
+    parsed: set[Tag] = set()
+    for tag in tags:
+        parsed |= parse_tag(tag)
+    if len(tags) == 1:
+        tag_component = tags[0]
+    else:
+        interpreters = ".".join(sorted({item.interpreter for item in parsed}))
+        abis = ".".join(sorted({item.abi for item in parsed}))
+        platforms = ".".join(sorted({item.platform for item in parsed}))
+        tag_component = f"{interpreters}-{abis}-{platforms}"
+    filename = f"{_distribution_file_name(name)}-{version.replace('-', '_')}-{tag_component}.whl"
+    assert_wheel_filename_matches(filename, name, version, tags)
+    return filename
+
+
+def assert_wheel_filename_matches(filename: str, name: str, version: str, tags: list[str]) -> str:
+    """Reject a truncated name such as torch-2.5.1+cu121.whl."""
+    parsed_name, parsed_version, _build, parsed_tags = parse_wheel_filename(filename)
+    expected: set[Tag] = set()
+    for tag in tags:
+        expected |= parse_tag(tag)
+    if parsed_name != canonicalize_name(name):
+        raise ValueError("wheel filename does not match METADATA name")
+    if parsed_version != Version(version):
+        raise ValueError("wheel filename does not match METADATA version")
+    if parsed_tags != expected:
+        raise ValueError("wheel filename does not match WHEEL tags")
+    return filename
+
+
+def stage_selected(cache: Path, records: list[dict[str, object]], destination: Path) -> list[Path]:
+    """Validate a future copy, then refuse to write it.
+
+    select-cache does not call this. No wheel is copied in this revision.
     """
     if not manifest_path_is_outside_cache(cache, destination):
         raise ValueError("refusing to write the wheelhouse inside the pip cache")
-    destination.mkdir(parents=True, exist_ok=True)
-    written = []
     for record in records:
+        if record.get("filename_provenance_accredited") is not True:
+            raise ValueError("original wheel filename is not accredited")
+        raw_tags = record["tags"]
+        if not isinstance(raw_tags, list) or not raw_tags:
+            raise ValueError("wheel tags are required to name a wheel")
+        tags = [str(tag) for tag in raw_tags]
+        filename = assert_wheel_filename_matches(
+            str(record.get("original_filename", "")),
+            str(record["declared_name"]),
+            str(record["declared_version"]),
+            tags,
+        )
+        if filename != candidate_wheel_filename(
+            str(record["declared_name"]),
+            str(record["declared_version"]),
+            tags,
+        ):
+            raise ValueError("wheel filename does not match the metadata and tags")
         origin = Path(str(record["origin_path"]))
         before = origin.stat().st_mtime_ns
         payload = origin.read_bytes()
         if hashlib.sha256(payload).hexdigest() != record["sha256"]:
-            raise ValueError(f"origin changed while reading {origin}")
-        target = destination / f"{canonicalize_name(str(record['declared_name']))}-{record['declared_version']}.whl"
-        with target.open("wb") as handle:
-            handle.write(payload)
+            raise ValueError(f"sha256 does not match {origin}")
         if origin.stat().st_mtime_ns != before:
             raise ValueError(f"cache file was modified: {origin}")
-        written.append(target)
-    return written
+    if MATERIALIZATION_AUTHORIZED is not True:
+        raise RuntimeError("wheel materialization is not authorized")
+    raise RuntimeError("wheel materialization is not authorized")
 
 
 def download_plan() -> dict[str, object]:
@@ -546,7 +707,7 @@ def download_plan() -> dict[str, object]:
             raise ValueError(f"refusing unofficial host {host}")
         planned.append({**item, "download_authorized": False, "provenance": "pypi-json-2026-10-27"})
     unpinned = [item["name"] for item in closure["unpinned"]]
-    present = [item for item in closure["cache_findings"] if item["status"] == "PRESENT_IN_CACHE"]
+    present = [item for item in closure["cache_findings"] if item["status"] == "VERSION_OBSERVED"]
     return {
         "download_authorized": False,
         "exact_missing": planned,

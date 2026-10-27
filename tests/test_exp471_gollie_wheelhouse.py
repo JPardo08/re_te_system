@@ -12,6 +12,8 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from packaging.tags import Tag
+from packaging.utils import InvalidWheelFilename
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,11 +64,47 @@ def test_closure_names_the_ten_cu121_nvidia_wheels_and_leaves_setuptools_unpinne
         assert item["status"] == "MISSING"
     findings = {(item["name"], item["version"]): item for item in closure["cache_findings"]}
     present = findings[("sympy", "1.13.1")]
-    assert present["status"] == "PRESENT_IN_CACHE"
+    assert present["status"] == "VERSION_OBSERVED"
+    assert present["selected_candidate"] is False
     assert present["accreditation"] == "NOT_ACCREDITED"
     assert "sha256" not in present
+    assert "measured_sha256" not in present
     assert "origin_path" not in present
     assert findings[("sympy", "1.14.0")]["status"] == "INCOMPATIBLE"
+    assert closure["evidence"] == "static_version_list"
+    assert closure["selection_executed"] is False
+    assert closure["materialized"] is False
+    assert closure["installable_wheelhouse"] is False
+    for item in closure["exact_missing"]:
+        assert item["evidence"] == "static_version_list"
+        assert item["selected_candidate"] is False
+    assert all(item["version"] != "2.14" for item in closure["exact_required"])
+    assert all(item["status"] == "VERSION_OBSERVED" for item in closure["available_exact"])
+    observed = wheelhouse.CESVIMA_SELECT_CACHE
+    assert observed["manifest_sha256"] == "e73bc2dc212fb31324eb0b07c4f1c9e0dfeb0f078d783dd4fafcb0ba23883fe0"
+    assert observed["selected"] == 7
+    assert observed["ambiguous"] == 0
+    assert observed["rejected"] == 21
+    assert observed["unpinned_observed"] == 77
+    assert observed["materialized"] is False
+    assert observed["installable_wheelhouse"] is False
+    assert observed["provenance_accredited"] is False
+    reported = {(item["name"], item["version"]): item for item in observed["records"]}
+    assert reported[("sympy", "1.13.1")]["outcome"] == "SELECTED_CANDIDATE"
+    assert (
+        reported[("sympy", "1.13.1")]["measured_sha256"]
+        == "db36cdc64bf61b9b24578b6f7bab1ecdd2452cf008f34faa33776680c26d66f8"
+    )
+    assert reported[("nvidia-cudnn-cu12", "9.1.0.70")]["outcome"] == "REJECTED"
+    assert reported[("nvidia-cudnn-cu12", "9.1.0.70")]["tag"] == "py3-none-manylinux2014_x86_64"
+    assert (
+        reported[("nvidia-cudnn-cu12", "9.1.0.70")]["measured_sha256"]
+        == "165764f44ef8c61fcdfdfdbe769d687e06374059fbb388b6c89ecb0e28793a6f"
+    )
+    assert reported[("sympy", "1.14.0")]["outcome"] == "REJECTED"
+    assert reported[("torch", "2.14")]["outcome"] == "REJECTED"
+    assert reported[("triton", "3.8")]["outcome"] == "REJECTED"
+    assert closure["cesvima_select_cache"]["selected"] == 7
     assert "nvidia-cudnn-cu12" not in missing
     assert all(not version.startswith("12.4") for version in missing.values())
     assert all("cu13" not in name for name in missing)
@@ -75,8 +113,8 @@ def test_closure_names_the_ten_cu121_nvidia_wheels_and_leaves_setuptools_unpinne
     assert "nvidia-nvjitlink-cu12" in unpinned
     assert ">=4.8.0" in unpinned["typing-extensions"]
     assert ">=22.0" in unpinned["packaging"]
-    assert "2.14" not in str(closure)
     assert "triton 3.8" not in str(closure["exact_missing"])
+    assert "cu13" not in str(closure["exact_missing"])
     assert closure["provenance_accredited"] is False
 
 
@@ -87,6 +125,8 @@ def test_download_plan_keeps_official_hashes_and_refuses_to_fetch() -> None:
     assert names == set(NVIDIA_MISSING)
     present = plan["present_not_accredited"]
     assert [(item["name"], item["version"]) for item in present] == [("sympy", "1.13.1")]
+    assert present[0]["status"] == "VERSION_OBSERVED"
+    assert present[0]["selected_candidate"] is False
     assert "sha256" not in present[0]
     nvrtc = next(item for item in plan["exact_missing"] if item["name"] == "nvidia-cuda-nvrtc-cu12")
     assert nvrtc["sha256"] == "339b385f50c309763ca65456ec75e17bbefcbbf2893f462cb8b90584cd27a1c2"
@@ -124,8 +164,9 @@ def test_cache_selection_is_read_only_and_does_not_accredit_metadata(tmp_path: P
     assert {"torch", "triton", "nvidia-cublas-cu12", "nvidia-cuda-nvrtc-cu13"} <= rejected_names
     assert [item["declared_name"] for item in selection["unpinned_observed"]] == ["filelock"]
     destination = tmp_path / "wheelhouse"
-    written = wheelhouse.stage_selected(tmp_path / "http-v2", selected, destination)
-    assert written[0].is_file()
+    with pytest.raises(ValueError, match="not accredited"):
+        wheelhouse.stage_selected(tmp_path / "http-v2", selected, destination)
+    assert not destination.exists()
     assert _signature(body) == before[body]
     with pytest.raises(ValueError, match="inside the pip cache"):
         wheelhouse.stage_selected(tmp_path / "http-v2", selected, cache / "copy")
@@ -158,7 +199,7 @@ def test_sympy_1131_py3_none_any_is_selected_without_materializing(tmp_path: Pat
     assert chosen["declared_name"] == "sympy"
     assert chosen["declared_version"] == "1.13.1"
     assert chosen["tags"] == ["py3-none-any"]
-    assert chosen["status"] == "PRESENT_IN_CACHE"
+    assert chosen["status"] == "SELECTED_CANDIDATE"
     assert chosen["accreditation"] == "NOT_ACCREDITED"
     assert chosen["provenance_accredited"] is False
     assert chosen["origin_path"] == str(good.resolve())
@@ -179,6 +220,64 @@ def test_sympy_1131_py3_none_any_is_selected_without_materializing(tmp_path: Pat
     assert payload["materialized"] is False
     assert not (tmp_path / "wheelhouse").exists()
     assert {path: _signature(path) for path in cache.iterdir()} == before
+
+
+def test_glibc_228_accepts_manylinux2014_and_does_not_copy_a_wheel(tmp_path: Path) -> None:
+    accepted = wheelhouse.target_tag_set()
+    assert Tag("py3", "none", "any") in accepted
+    assert Tag("py3", "none", "manylinux2014_x86_64") in accepted
+    assert Tag("cp312", "cp312", "manylinux_2_28_x86_64") in accepted
+    assert Tag("cp312", "cp312", "linux_x86_64") in accepted
+    assert Tag("cp39", "abi3", "manylinux2014_x86_64") in accepted
+    assert Tag("cp312", "abi3", "manylinux2014_x86_64") in accepted
+    assert Tag("cp312", "cp312", "manylinux_2_31_x86_64") not in accepted
+    assert Tag("py3", "none", "manylinux_2_34_x86_64") not in accepted
+    assert all("macosx" not in tag.platform and "win" not in tag.platform for tag in accepted)
+    assert all("aarch64" not in tag.platform for tag in accepted)
+    assert wheelhouse._tags_are_appropriate(["py3-none-manylinux2014_x86_64"]) is True
+    assert wheelhouse._tags_are_appropriate(["cp39-abi3-manylinux2014_x86_64"]) is True
+    assert wheelhouse._tags_are_appropriate(["py3-none-manylinux_2_31_x86_64"]) is False
+    assert wheelhouse._tags_are_appropriate(["py3-none-macosx_14_0_arm64"]) is False
+    cache = tmp_path / "http-v2"
+    body = cache / "cudnn.body"
+    _wheel(body, "nvidia-cudnn-cu12", "9.1.0.70", tag="py3-none-manylinux2014_x86_64")
+    _wheel(cache / "too-new.body", "nvidia-cudnn-cu12", "9.1.0.70", tag="py3-none-manylinux_2_34_x86_64")
+    before = {path: _signature(path) for path in cache.iterdir()}
+    selection = wheelhouse.select_records(wheelhouse.scan_cache(cache))
+    assert len(selection["selected"]) == 1
+    chosen = selection["selected"][0]
+    assert chosen["declared_name"] == "nvidia-cudnn-cu12"
+    assert chosen["status"] == "SELECTED_CANDIDATE"
+    assert chosen["hash_evidence"] == "measured"
+    assert chosen["provenance_accredited"] is False
+    assert chosen["filename_provenance_accredited"] is False
+    assert chosen["sha256"] == hashlib.sha256(body.read_bytes()).hexdigest()
+    assert chosen["sha256"] != "165764f44ef8c61fcdfdfdbe769d687e06374059fbb388b6c89ecb0e28793a6f"
+    assert any(item.get("status") == "INCOMPATIBLE" for item in selection["rejected"])
+    filename = wheelhouse.candidate_wheel_filename(
+        "nvidia-cudnn-cu12",
+        "9.1.0.70",
+        ["py3-none-manylinux2014_x86_64"],
+    )
+    assert filename == "nvidia_cudnn_cu12-9.1.0.70-py3-none-manylinux2014_x86_64.whl"
+    torch_name = wheelhouse.candidate_wheel_filename("torch", "2.5.1+cu121", ["cp312-cp312-linux_x86_64"])
+    assert torch_name == "torch-2.5.1+cu121-cp312-cp312-linux_x86_64.whl"
+    with pytest.raises(InvalidWheelFilename):
+        wheelhouse.assert_wheel_filename_matches(
+            "torch-2.5.1+cu121.whl",
+            "torch",
+            "2.5.1+cu121",
+            ["cp312-cp312-linux_x86_64"],
+        )
+    accredited = dict(chosen)
+    accredited["filename_provenance_accredited"] = True
+    accredited["original_filename"] = filename
+    destination = tmp_path / "wheelhouse"
+    with pytest.raises(RuntimeError, match="not authorized"):
+        wheelhouse.stage_selected(cache, [accredited], destination)
+    assert not destination.exists()
+    assert {path: _signature(path) for path in cache.iterdir()} == before
+    assert wheelhouse.MATERIALIZATION_AUTHORIZED is False
 
 
 @pytest.mark.skipif(not PYTHON.is_file(), reason="canonical Python 3.12 is absent")
