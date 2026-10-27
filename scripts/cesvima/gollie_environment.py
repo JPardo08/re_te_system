@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -39,14 +41,17 @@ def evaluate_abi(
     installed_extension_sha256: str | None,
     dynamic_dependencies_resolved: bool | None,
     glibc_requirement_satisfied: bool | None,
+    import_succeeded: bool | None,
     observed_on_gpu_node: bool,
 ) -> dict[str, object]:
     """ABI_PASS requires a matched wheel binary observed on the GPU node.
 
-    A missing observation stays not_decided. The pre-correction extension and
-    a binary that is not MATCH never become ABI_PASS. Static GLIBC text is
-    not an observation. An explicit negative observation of a MATCH is a
-    failure of that binary, not of the historical mismatch.
+    The observation is dynamic dependencies, GLIBC symbols against the
+    running libc, and an import that does not launch the kernel. A missing
+    observation stays not_decided. The pre-correction extension and a binary
+    that is not MATCH never become ABI_PASS. Static GLIBC text is not an
+    observation. An explicit negative observation of a MATCH is a failure of
+    that binary, not of the historical mismatch.
     """
     if installed_extension_sha256 == INSTALLED_EXTENSION_SHA256 or binary_identity != "MATCH":
         return {
@@ -55,18 +60,22 @@ def evaluate_abi(
             "abi_verdict": "not_decided",
             "reason": "binary identity is not the pinned wheel",
         }
-    if (
-        not observed_on_gpu_node
-        or dynamic_dependencies_resolved is None
-        or glibc_requirement_satisfied is None
-    ):
+    checks = (dynamic_dependencies_resolved, glibc_requirement_satisfied, import_succeeded)
+    if not observed_on_gpu_node or any(item is None for item in checks):
+        if observed_on_gpu_node and any(item is False for item in checks):
+            return {
+                "abi_failed": True,
+                "abi_pass": False,
+                "abi_verdict": "fail",
+                "reason": "dynamic dependencies, GLIBC, or import failed on the GPU node",
+            }
         return {
             "abi_failed": False,
             "abi_pass": False,
             "abi_verdict": "not_decided",
             "reason": "ABI was not observed on the GPU node",
         }
-    if dynamic_dependencies_resolved is True and glibc_requirement_satisfied is True:
+    if all(item is True for item in checks):
         return {
             "abi_failed": False,
             "abi_pass": True,
@@ -77,7 +86,7 @@ def evaluate_abi(
         "abi_failed": True,
         "abi_pass": False,
         "abi_verdict": "fail",
-        "reason": "dynamic dependencies or GLIBC are not satisfied on the GPU node",
+        "reason": "dynamic dependencies, GLIBC, or import failed on the GPU node",
     }
 
 
@@ -92,6 +101,7 @@ def assess_gollie_installation(
     wheel_extension_sha256: str | None,
     dynamic_dependencies_resolved: bool | None = None,
     glibc_requirement_satisfied: bool | None = None,
+    import_succeeded: bool | None = None,
     abi_observed_on_gpu_node: bool = False,
 ) -> dict[str, object]:
     """Compare versions and extension bytes. Do not treat a version string as the wheel."""
@@ -118,6 +128,7 @@ def assess_gollie_installation(
         installed_extension_sha256=installed_extension_sha256,
         dynamic_dependencies_resolved=dynamic_dependencies_resolved,
         glibc_requirement_satisfied=glibc_requirement_satisfied,
+        import_succeeded=import_succeeded,
         observed_on_gpu_node=abi_observed_on_gpu_node,
     )
     accredited = bool(
@@ -138,6 +149,7 @@ def assess_gollie_installation(
         "dynamic_dependencies_resolved": dynamic_dependencies_resolved,
         "flash_attn": flash_attn_version,
         "glibc_requirement_satisfied": glibc_requirement_satisfied,
+        "import_succeeded": import_succeeded,
         "installed_extension_sha256": installed_extension_sha256,
         "installed_glibc_max": INSTALLED_EXTENSION_GLIBC_MAX if known_precorrection else None,
         "installed_package_is_verified_wheel": accredited,
@@ -236,6 +248,7 @@ def build_preflight_report(
         installed_extension_sha256=installed if isinstance(installed, str) else None,
         dynamic_dependencies_resolved=_optional_bool(assessment.get("dynamic_dependencies_resolved")),
         glibc_requirement_satisfied=_optional_bool(assessment.get("glibc_requirement_satisfied")),
+        import_succeeded=_optional_bool(assessment.get("import_succeeded")),
         observed_on_gpu_node=assessment.get("abi_observed_on_gpu_node") is True,
     )
     hashes_match = (
@@ -273,6 +286,7 @@ def build_preflight_report(
         "extension_filename": FLASH_ATTN_EXTENSION,
         "flash_attn": assessment.get("flash_attn"),
         "glibc_requirement_satisfied": assessment.get("glibc_requirement_satisfied"),
+        "import_succeeded": assessment.get("import_succeeded"),
         "installed_extension_sha256": installed,
         "installed_package_is_verified_wheel": identity == "MATCH" and bool(assessment.get("versions_ok")),
         "kernel_device_family": kernel_device_family,
@@ -361,6 +375,8 @@ def j16_rejection_reason(report: dict[str, object], pointer_job_id: str) -> str 
         return "ABI observations are incomplete; refusing to download"
     if report.get("flash_attn") != FLASH_ATTN_VERSION:
         return "J15 flash-attn version is not the pinned version; refusing to download"
+    if report.get("import_succeeded") is not True:
+        return "extension import was not observed; refusing to download"
     return None
 
 
@@ -419,7 +435,7 @@ def assess_from_files(
     installed_hash = sha256_file(installed_extension) if installed_extension and installed_extension.is_file() else None
     wheel_hash = sha256_file(wheel) if wheel and wheel.is_file() else None
     member_hash = wheel_extension_sha256(wheel) if wheel and wheel.is_file() and wheel_hash == FLASH_ATTN_WHEEL_SHA256 else None
-    return assess_gollie_installation(
+    assessment = assess_gollie_installation(
         torch_version=versions.get("torch"),
         transformers_version=versions.get("transformers"),
         flash_attn_version=versions.get("flash_attn"),
@@ -428,6 +444,10 @@ def assess_from_files(
         wheel_sha256=wheel_hash,
         wheel_extension_sha256=member_hash,
     )
+    assessment["installed_extension_path"] = (
+        str(installed_extension) if installed_extension is not None else None
+    )
+    return assessment
 
 
 def _probe_versions() -> dict[str, str | None]:
@@ -447,11 +467,152 @@ def _probe_versions() -> dict[str, str | None]:
     return found
 
 
+def extension_site_path(venv: Path) -> Path:
+    """Exact CESVIMA location. cp312 is lib/python3.12, not a glob."""
+    return venv / "lib" / "python3.12" / "site-packages" / FLASH_ATTN_EXTENSION
+
+
+def _extension_candidates(venv: Path) -> list[Path]:
+    site = venv / "lib" / "python3.12" / "site-packages"
+    exact = site / FLASH_ATTN_EXTENSION
+    nested = site / "flash_attn" / FLASH_ATTN_EXTENSION
+    return [path for path in (exact, nested) if path.is_file()]
+
+
 def _find_extension(venv: Path) -> Path | None:
-    matches = list(venv.glob(f"lib/python*/site-packages/flash_attn/{FLASH_ATTN_EXTENSION}"))
-    if len(matches) != 1:
+    """Return the site-packages copy only when it is the single candidate.
+
+    The nested flash_attn/ copy is a different path. Zero matches and two
+    matches both fail closed. Other Python directories are not searched.
+    """
+    exact = extension_site_path(venv)
+    found = _extension_candidates(venv)
+    if found != [exact]:
         return None
-    return matches[0]
+    return exact
+
+
+_GLIBC_NEEDED = re.compile(r"GLIBC_(\d+)\.(\d+)")
+
+
+def dynamic_dependencies_resolved(ldd_text: str | None) -> bool | None:
+    """True when ldd resolves every library. Static wheel metadata is ignored."""
+    if ldd_text is None or not ldd_text.strip():
+        return None
+    if "not found" in ldd_text:
+        return False
+    if "=>" not in ldd_text and ".so" not in ldd_text:
+        return None
+    return True
+
+
+def _glibc_tuple(text: str) -> tuple[int, int] | None:
+    match = re.search(r"(\d+)\.(\d+)", text)
+    if match is None:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def glibc_requirement_satisfied(symbol_text: str | None, runtime_glibc: str | None) -> bool | None:
+    """Compare GLIBC_* symbols in the extension with the running libc.
+
+    A bare version such as the wheel's static maximum is not a symbol dump
+    and does not satisfy the check.
+    """
+    if symbol_text is None or runtime_glibc is None:
+        return None
+    needed = [(int(major), int(minor)) for major, minor in _GLIBC_NEEDED.findall(symbol_text)]
+    runtime = _glibc_tuple(runtime_glibc)
+    if not needed or runtime is None:
+        return None
+    return max(needed) <= runtime
+
+
+def _command_text(argv: list[str]) -> str | None:
+    try:
+        completed = subprocess.run(argv, capture_output=True, text=True, check=False)
+    except OSError:
+        return None
+    text = completed.stdout or ""
+    if not text.strip():
+        text = completed.stderr or ""
+    if not text.strip():
+        return None
+    return text
+
+
+def _import_extension_without_kernel() -> bool:
+    """Import the package. Do not call the attention kernel."""
+    import importlib
+
+    importlib.import_module("flash_attn")
+    return True
+
+
+def collect_runtime_abi(extension: Path, *, device_family: str | None) -> dict[str, object]:
+    """Observe ldd, GLIBC symbols, and import. Do not launch the kernel.
+
+    Observations count only on an L40S node. The wheel's static GLIBC maximum
+    is not read and is not a substitute for the symbol dump.
+    """
+    unobserved = {
+        "dynamic_dependencies_resolved": None,
+        "glibc_requirement_satisfied": None,
+        "import_succeeded": None,
+        "observed_on_gpu_node": False,
+        "static_glibc_used": False,
+    }
+    if device_family != "L40S" or not extension.is_file():
+        return unobserved
+    ldd_text = _command_text(["ldd", str(extension)])
+    symbol_text = _command_text(["readelf", "-V", str(extension)])
+    if symbol_text is None:
+        symbol_text = _command_text(["objdump", "-T", str(extension)])
+    runtime_glibc = _command_text(["getconf", "GNU_LIBC_VERSION"])
+    try:
+        imported: bool | None = _import_extension_without_kernel()
+    except Exception:
+        imported = False
+    return {
+        "dynamic_dependencies_resolved": dynamic_dependencies_resolved(ldd_text),
+        "glibc_requirement_satisfied": glibc_requirement_satisfied(symbol_text, runtime_glibc),
+        "import_succeeded": imported,
+        "observed_on_gpu_node": True,
+        "static_glibc_used": False,
+    }
+
+
+def merge_abi_observations(
+    assessment: dict[str, object],
+    observations: dict[str, object],
+) -> dict[str, object]:
+    merged = dict(assessment)
+    for key in (
+        "dynamic_dependencies_resolved",
+        "glibc_requirement_satisfied",
+        "import_succeeded",
+    ):
+        if key in observations:
+            merged[key] = observations[key]
+    if "abi_observed_on_gpu_node" in observations:
+        merged["abi_observed_on_gpu_node"] = observations["abi_observed_on_gpu_node"]
+    elif "observed_on_gpu_node" in observations:
+        merged["abi_observed_on_gpu_node"] = observations["observed_on_gpu_node"]
+    installed = merged.get("installed_extension_sha256")
+    abi = evaluate_abi(
+        binary_identity=str(merged.get("binary_identity")),
+        installed_extension_sha256=installed if isinstance(installed, str) else None,
+        dynamic_dependencies_resolved=_optional_bool(merged.get("dynamic_dependencies_resolved")),
+        glibc_requirement_satisfied=_optional_bool(merged.get("glibc_requirement_satisfied")),
+        import_succeeded=_optional_bool(merged.get("import_succeeded")),
+        observed_on_gpu_node=merged.get("abi_observed_on_gpu_node") is True,
+    )
+    merged["abi_failed"] = abi["abi_failed"]
+    merged["abi_pass"] = abi["abi_pass"]
+    merged["abi_reason"] = abi["reason"]
+    merged["abi_verdict"] = abi["abi_verdict"]
+    merged["static_glibc_is_abi_pass"] = STATIC_GLIBC_IS_ABI_PASS
+    return merged
 
 
 def main(argv: list[str] | None = None) -> int:

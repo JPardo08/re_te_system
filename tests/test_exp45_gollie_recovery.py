@@ -192,6 +192,7 @@ def test_j16_rejects_legacy_and_stays_unauthorized(
         "dynamic_dependencies_resolved": True,
         "flash_attn": FLASH_ATTN_VERSION,
         "glibc_requirement_satisfied": True,
+        "import_succeeded": True,
         "installed_extension_sha256": "f" * 64,
         "kernel_device_family": "L40S",
         "kernel_finite": True,

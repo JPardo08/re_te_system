@@ -173,6 +173,7 @@ def test_simulated_match_abi_and_kernel_pass_without_opening_j16(
         FUTURE,
         dynamic_dependencies_resolved=True,
         glibc_requirement_satisfied=True,
+        import_succeeded=True,
         abi_observed_on_gpu_node=True,
     )
     assert assessment["abi_pass"] is True
@@ -200,6 +201,7 @@ def test_simulated_match_abi_and_kernel_pass_without_opening_j16(
     assert report["kernel_finite"] is True
     assert report["dynamic_dependencies_resolved"] is True
     assert report["glibc_requirement_satisfied"] is True
+    assert report["import_succeeded"] is True
     assert report["weights_downloaded"] is False
     assert gollie_env.j16_rejection_reason(report, "1350001") is None
     assert gollie_env.j16_rejection_reason(report, "1350002") == (
@@ -222,7 +224,22 @@ def test_simulated_match_abi_and_kernel_pass_without_opening_j16(
     legacy.parent.mkdir(parents=True)
     legacy.write_text('{"status":"PASS"}\n', encoding="utf-8")
     monkeypatch.setenv("SLURMD_NODENAME", "r1n1")
+    assessment["installed_extension_path"] = str(
+        tmp_path / "lib" / "python3.12" / "site-packages" / "flash_attn_2_cuda.cpython-312-x86_64-linux-gnu.so"
+    )
     monkeypatch.setattr(j15, "probe_installed_environment", lambda: assessment)
+    monkeypatch.setattr(j15, "_device_family", lambda: "L40S")
+    monkeypatch.setattr(
+        j15,
+        "collect_runtime_abi",
+        lambda _extension, *, device_family: {
+            "dynamic_dependencies_resolved": True,
+            "glibc_requirement_satisfied": True,
+            "import_succeeded": True,
+            "observed_on_gpu_node": device_family == "L40S",
+            "static_glibc_used": False,
+        },
+    )
 
     def kernel() -> dict[str, object]:
         return {"cuda_device_name": "NVIDIA L40S"}

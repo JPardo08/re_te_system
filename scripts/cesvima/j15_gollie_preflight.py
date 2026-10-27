@@ -11,6 +11,8 @@ from pathlib import Path
 from cesvima_common import fail, require_cuda_family
 from gollie_environment import (
     build_preflight_report,
+    collect_runtime_abi,
+    merge_abi_observations,
     probe_installed_environment,
     write_accepted_pointer,
     write_job_report,
@@ -81,6 +83,39 @@ def _job_id() -> str:
     return job_id
 
 
+def _device_family() -> str | None:
+    """Name the visible GPU without launching FlashAttention."""
+    try:
+        import torch
+    except ImportError:
+        return None
+    if not torch.cuda.is_available():
+        return None
+    name = torch.cuda.get_device_name(0)
+    if "l40s" in name.lower():
+        return "L40S"
+    return name
+
+
+def _observe_abi(assessment: dict[str, object]) -> dict[str, object]:
+    raw = assessment.get("installed_extension_path")
+    family = _device_family()
+    if not isinstance(raw, str) or not raw:
+        return merge_abi_observations(
+            assessment,
+            {
+                "abi_observed_on_gpu_node": False,
+                "dynamic_dependencies_resolved": None,
+                "glibc_requirement_satisfied": None,
+                "import_succeeded": None,
+            },
+        )
+    return merge_abi_observations(
+        assessment,
+        collect_runtime_abi(Path(raw), device_family=family),
+    )
+
+
 def _kernel_observation() -> dict[str, object]:
     import torch
 
@@ -122,6 +157,7 @@ def main() -> int:
         write_job_report(runs, job_id, report)
         print(f"BLOCKED_BINARY_IDENTITY {assessment['binary_identity']}", flush=True)
         return 2
+    assessment = _observe_abi(assessment)
     if assessment["abi_pass"] is not True:
         report = build_preflight_report(
             assessment,
