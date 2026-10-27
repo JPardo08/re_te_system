@@ -317,6 +317,44 @@ PUBLISHED_CACHE_WHEELS = (
     },
 )
 
+# Versions read in gollie-l40s. Torch metadata does not require these versions.
+# nvjitlink 12.9.86 has not been shown to load under the cu121 stack; R1/R2 remain closed.
+EXP48_WHEELHOUSE_NAME = "gollie-wheelhouse-exp48"
+EXP49_WHEELHOUSE_NAME = "gollie-wheelhouse-exp49"
+EXP48_REUSED_COUNT = 8
+OFFLINE_RESOLVE_ARGUMENTS = (
+    "--dry-run",
+    "--ignore-installed",
+    "--no-index",
+    "--find-links",
+    "--only-binary=:all:",
+)
+REPRODUCTION_WHEELS = (
+    {
+        "filename": "setuptools-78.1.0-py3-none-any.whl",
+        "name": "setuptools",
+        "pinned_by_torch": False,
+        "provenance": "pypi-json-2026-10-27",
+        "requires_dist": (),
+        "sha256": "3e386e96793c8702ae83d17b853fb93d3e09ef82ec62722e61da5cd22376dcd8",
+        "source": "gollie-l40s",
+        "url": "https://files.pythonhosted.org/packages/54/21/f43f0a1fa8b06b32812e0975981f4677d28e0f3271601dc88ac5a5b83220/setuptools-78.1.0-py3-none-any.whl",
+        "version": "78.1.0",
+    },
+    {
+        "filename": "nvidia_nvjitlink_cu12-12.9.86-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl",
+        "name": "nvidia-nvjitlink-cu12",
+        "pinned_by_torch": False,
+        "provenance": "pypi-json-2026-10-27",
+        "requires_dist": (),
+        "runtime_compatibility": "pending_r1_r2",
+        "sha256": "e3f1171dbdc83c5932a45f0f4c99180a70de9bd2718c1ab77d14104f6d7147f9",
+        "source": "gollie-l40s",
+        "url": "https://files.pythonhosted.org/packages/46/0c/c75bbfb967457a0b7670b8ad267bfc4fffdf341c074e0a80db06c24ccfd4/nvidia_nvjitlink_cu12-12.9.86-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl",
+        "version": "12.9.86",
+    },
+)
+
 
 def linux_py312_environment() -> dict[str, str]:
     environment = default_environment()
@@ -798,18 +836,200 @@ def pending_dependencies() -> dict[str, object]:
                 "name": "setuptools",
                 "reason": (
                     "torch 2.5.1+cu121 requires setuptools for Python >= 3.12 with no version. "
-                    "Its dependencies were not read."
+                    "gollie-l40s has setuptools 78.1.0; that choice is not a torch pin. "
+                    "The published wheel's base Requires-Dist is empty."
                 ),
             },
             {
                 "name": "nvidia-nvjitlink-cu12",
                 "reason": (
                     "nvidia-cusolver-cu12 11.4.5.107 and nvidia-cusparse-cu12 12.1.0.106 "
-                    "require nvidia-nvjitlink-cu12 with no version. Its dependencies were not read."
+                    "require nvidia-nvjitlink-cu12 with no version. gollie-l40s has 12.9.86; "
+                    "that choice is not a torch pin. The published wheel has no Requires-Dist. "
+                    "Runtime compatibility remains pending R1 and R2."
                 ),
             },
         ],
     }
+
+
+def unresolved_transitive() -> list[dict[str, str]]:
+    """Requirements with no version observed from gollie-l40s.
+
+    requests, jinja2 and the other names in this list are not given a wheel.
+    Their own dependencies were not read, because that would require choosing
+    a version.
+    """
+    reproduced = {canonicalize_name(item["name"]) for item in REPRODUCTION_WHEELS}
+    found = []
+    for item in prepared_closure()["unpinned"]:
+        name = str(item["name"])
+        if canonicalize_name(name) in reproduced:
+            continue
+        found.append(
+            {
+                "name": name,
+                "reason": (
+                    "No gollie-l40s version of this requirement was recorded. "
+                    "A version match in the HTTP cache would not by itself identify a wheel."
+                ),
+                "specifier": str(item["specifier"]),
+                "status": "VERSION_NOT_OBSERVED",
+            }
+        )
+    return found
+
+
+def recovery_plan() -> dict[str, object]:
+    """Reusable EXP.4.8 wheels, the fixed CUDA 12 downloads, and the two reproduced pins."""
+    downloads = []
+    for item in OFFICIAL_LINUX_WHEELS:
+        if canonicalize_name(item["name"]) not in {
+            canonicalize_name(missing["name"]) for missing in prepared_closure()["exact_missing"]
+        }:
+            continue
+        downloads.append(
+            {
+                **item,
+                "action": "DOWNLOAD_REQUIRED",
+                "download_authorized": False,
+                "pinned_by_torch": True,
+            }
+        )
+    for item in REPRODUCTION_WHEELS:
+        downloads.append(
+            {
+                "action": "DOWNLOAD_REQUIRED",
+                "download_authorized": False,
+                "filename": item["filename"],
+                "name": item["name"],
+                "pinned_by_torch": False,
+                "provenance": item["provenance"],
+                "requires_dist": list(item["requires_dist"]),
+                "sha256": item["sha256"],
+                "source": item["source"],
+                "url": item["url"],
+                "version": item["version"],
+            }
+        )
+    return {
+        "closure_complete": False,
+        "download_authorized": False,
+        "installable_wheelhouse": False,
+        "nvjitlink_runtime_compatibility": "pending_r1_r2",
+        "offline_resolve": list(OFFLINE_RESOLVE_ARGUMENTS),
+        "offline_resolve_pass": False,
+        "reused_from_exp48": {
+            "directory": f"recovery/{EXP48_WHEELHOUSE_NAME}",
+            "wheel_count": EXP48_REUSED_COUNT,
+            "write": False,
+        },
+        "selective_download": downloads,
+        "unresolved_transitive": unresolved_transitive(),
+    }
+
+
+def reuse_exp48_wheels(
+    source: Path,
+    destination: Path,
+    *,
+    authorized: bool,
+    scratch_root: Path,
+    expected_count: int = EXP48_REUSED_COUNT,
+    published: tuple[dict[str, str], ...] | None = None,
+) -> dict[str, object]:
+    """Copy the verified EXP.4.8 wheels into a new directory. The source is not written."""
+    if authorized is not True:
+        raise RuntimeError("wheelhouse recovery is not authorized")
+    if source.is_symlink() or not source.is_dir():
+        raise ValueError("EXP.4.8 wheelhouse must be a real directory")
+    if source.name != EXP48_WHEELHOUSE_NAME:
+        raise ValueError("source is not the EXP.4.8 wheelhouse")
+    resolved_source = source.resolve()
+    resolved_destination = destination.resolve()
+    if (
+        destination.name == EXP48_WHEELHOUSE_NAME
+        or resolved_source == resolved_destination
+        or resolved_source in resolved_destination.parents
+    ):
+        raise ValueError("refusing to modify the EXP.4.8 wheelhouse")
+    if destination.exists() or destination.is_symlink():
+        raise ValueError("refusing to write into an existing directory")
+    if not _is_inside(scratch_root, destination) or resolved_destination == scratch_root.resolve():
+        raise ValueError("wheelhouse must be a new directory inside SCRATCH_ROOT")
+    if not _is_inside(scratch_root, source):
+        raise ValueError("EXP.4.8 wheelhouse must stay inside SCRATCH_ROOT")
+    forbidden = {"gollie-l40s", "gollie-isolated", "uie-train", "re_te_system_gpu_312", "re_te_system_312"}
+    if forbidden & set(resolved_destination.parts):
+        raise ValueError("refusing to write inside a venv path")
+    catalog = {item["sha256"]: item for item in (published_wheels() if published is None else published)}
+    wheels = [
+        path
+        for path in source.iterdir()
+        if path.is_file() and not path.is_symlink() and path.suffix == ".whl"
+    ]
+    if len(wheels) != expected_count:
+        raise ValueError(f"EXP.4.8 wheelhouse contains {len(wheels)} wheels, expected {expected_count}")
+    staged = []
+    for path in sorted(wheels):
+        before = path.stat().st_mtime_ns
+        payload = path.read_bytes()
+        if path.stat().st_mtime_ns != before:
+            raise ValueError(f"EXP.4.8 wheel changed while reading {path.name}")
+        digest = hashlib.sha256(payload).hexdigest()
+        official = catalog.get(digest)
+        if official is None or official["filename"] != path.name:
+            raise ValueError(f"EXP.4.8 wheel {path.name} does not match a published digest")
+        tags = parse_wheel_filename(path.name)[3]
+        if not _tags_are_appropriate([str(tag) for tag in tags]):
+            raise ValueError(f"EXP.4.8 wheel {path.name} has incompatible tags")
+        staged.append((path, payload, digest, before))
+    if len({item[0].name for item in staged}) != len(staged):
+        raise ValueError("refusing a filename collision")
+    if len({item[2] for item in staged}) != len(staged):
+        raise ValueError("refusing a digest collision")
+    plan = recovery_plan()
+    plan["download_authorized"] = False
+    created = False
+    try:
+        destination.mkdir(parents=False, exist_ok=False)
+        created = True
+        copied = []
+        for path, payload, digest, before in staged:
+            if path.stat().st_mtime_ns != before:
+                raise ValueError(f"EXP.4.8 wheel changed before copy: {path.name}")
+            target = destination / path.name
+            if target.exists():
+                raise ValueError(f"refusing to overwrite {target.name}")
+            with target.open("xb") as handle:
+                handle.write(payload)
+            if hashlib.sha256(target.read_bytes()).hexdigest() != digest:
+                raise ValueError(f"sha256 mismatch after copy: {target.name}")
+            if path.stat().st_mtime_ns != before:
+                raise ValueError(f"EXP.4.8 wheel was modified: {path.name}")
+            copied.append({"filename": path.name, "sha256": digest})
+        report = {
+            "closure_complete": False,
+            "copied": copied,
+            "download_authorized": False,
+            "installable_wheelhouse": False,
+            "offline_resolve_pass": False,
+            "plan": plan,
+            "source": str(source.resolve()),
+        }
+        (destination / "SHA256SUMS").write_text(
+            "".join(f"{item['sha256']}  {item['filename']}\n" for item in copied),
+            encoding="utf-8",
+        )
+        (destination / "recovery-plan.json").write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        if created:
+            shutil.rmtree(destination)
+        raise
+    return report
 
 
 def exp472_manifest_path(scratch: Path) -> Path:
@@ -1098,6 +1318,18 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         return 0
+    if args == ["recover"]:
+        if os.environ.get("GOLLIE_RECOVERY_AUTHORIZED") != "1":
+            raise RuntimeError("wheelhouse recovery is not authorized")
+        _emit(
+            reuse_exp48_wheels(
+                Path(os.environ["GOLLIE_EXP48_WHEELHOUSE"]),
+                Path(os.environ["GOLLIE_WHEELHOUSE"]),
+                authorized=True,
+                scratch_root=Path(os.environ["SCRATCH_ROOT"]),
+            )
+        )
+        return 0
     if args == ["select-cache"]:
         cache = Path(os.environ["GOLLIE_PIP_HTTP_CACHE"])
         manifest = Path(os.environ["GOLLIE_WHEEL_MANIFEST"])
@@ -1113,7 +1345,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"WHEEL_MANIFEST {manifest}")
         return 0
     print(
-        "usage: gollie_wheelhouse.py [missing|download-plan|download|select-cache|materialize]",
+        "usage: gollie_wheelhouse.py [missing|download-plan|download|select-cache|materialize|recover]",
         file=sys.stderr,
     )
     return 1

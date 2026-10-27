@@ -474,7 +474,14 @@ main() {
       fi
       wheelhouse_main materialize
       ;;
-    *) die "usage: bootstrap_gollie_isolated_venv.sh [inventory|resolve|install|assert-prep|assert-modeling|missing|download-plan|download|select-cache|materialize]" ;;
+    # Read EXP.4.8 and copy into a new directory. Does not download or install.
+    recover)
+      if [[ "${GOLLIE_RECOVERY_AUTHORIZED:-}" != "1" ]]; then
+        die "wheelhouse recovery is not authorized"
+      fi
+      wheelhouse_main recover
+      ;;
+    *) die "usage: bootstrap_gollie_isolated_venv.sh [inventory|resolve|install|assert-prep|assert-modeling|missing|download-plan|download|select-cache|materialize|recover]" ;;
   esac
 }
 
