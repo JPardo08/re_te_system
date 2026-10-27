@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.metadata
 import importlib.util
 import os
 import shutil
+import urllib.request
 from pathlib import Path
 
 from cesvima_common import fail, require_cuda_family
@@ -22,7 +24,82 @@ from gollie_environment import (
 GOLLIE_REPO = "HiTZ/GoLLIE-7B"
 GOLLIE_REVISION = "d3e41fef45f6a7d438c46ba7d9fce5d0d486c7a9"
 MODELING_FILE = "modeling_flash_llama.py"
+MODELING_BLOB_OID = "1330bc1ca5c6769f0880555350cfd33ea5ea4fbd"
+MODELING_SIZE = 46523
+MODELING_URL = (
+    "https://huggingface.co/HiTZ/GoLLIE-7B/resolve/"
+    "d3e41fef45f6a7d438c46ba7d9fce5d0d486c7a9/modeling_flash_llama.py"
+)
 FREE_BYTES = 40 * 1024 * 1024 * 1024
+
+
+class ModelingIdentityError(ValueError):
+    """The local modeling module is not the pinned GoLLIE revision."""
+
+
+def git_blob_oid(payload: bytes) -> str:
+    return hashlib.sha1(b"blob %d\0" % len(payload) + payload).hexdigest()
+
+
+def modeling_cache_path(cache: Path) -> Path:
+    folder = "models--" + GOLLIE_REPO.replace("/", "--")
+    return cache / folder / "snapshots" / GOLLIE_REVISION / MODELING_FILE
+
+
+def audit_modeling_file(path: Path) -> None:
+    """Check the pinned blob without importing or executing it."""
+    if path.is_symlink() or not path.is_file():
+        raise ModelingIdentityError(f"{MODELING_FILE} is absent at {path}")
+    payload = path.read_bytes()
+    if len(payload) != MODELING_SIZE:
+        raise ModelingIdentityError(f"modeling file size {len(payload)} != {MODELING_SIZE}")
+    oid = git_blob_oid(payload)
+    if oid != MODELING_BLOB_OID:
+        raise ModelingIdentityError(f"modeling git blob {oid} != {MODELING_BLOB_OID}")
+    if b"\0" in payload:
+        raise ModelingIdentityError("modeling file is not the text module")
+    try:
+        compile(payload.decode("utf-8"), MODELING_FILE, "exec")
+    except (SyntaxError, UnicodeError) as exc:
+        raise ModelingIdentityError(f"modeling file does not compile: {exc}") from exc
+
+
+def ensure_modeling_file(cache: str | Path, *, authorized: bool, fetcher=None) -> str:
+    """Place only modeling_flash_llama.py. Weights and the rest of the repo stay untouched."""
+    path = modeling_cache_path(Path(cache))
+    if path.is_symlink():
+        raise ModelingIdentityError("refusing a symlinked modeling file")
+    if path.is_file():
+        audit_modeling_file(path)
+        return "PRESENT"
+    if authorized is not True:
+        raise ModelingIdentityError("REFUSING_DOWNLOAD modeling file and weights")
+    if fetcher is None:
+        request = urllib.request.Request(MODELING_URL, headers={"User-Agent": "re_te_system-gollie-modeling"})
+        with urllib.request.urlopen(request, timeout=60) as response:
+            payload = response.read()
+    else:
+        payload = fetcher(MODELING_URL)
+    if not isinstance(payload, bytes):
+        raise ModelingIdentityError("modeling download did not return bytes")
+    temporary = path.with_name("." + path.name + ".partial")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary.write_bytes(payload)
+    try:
+        if len(payload) != MODELING_SIZE or git_blob_oid(payload) != MODELING_BLOB_OID:
+            raise ModelingIdentityError("downloaded modeling file does not match the pinned blob")
+        try:
+            compile(payload.decode("utf-8"), MODELING_FILE, "exec")
+        except (SyntaxError, UnicodeError) as exc:
+            raise ModelingIdentityError(f"modeling file does not compile: {exc}") from exc
+        if path.exists():
+            raise ModelingIdentityError("refusing to overwrite the modeling file")
+        os.link(temporary, path)
+    finally:
+        if temporary.exists() and not temporary.is_symlink():
+            temporary.unlink()
+    audit_modeling_file(path)
+    return "FETCHED"
 
 
 def _black_ok() -> str:

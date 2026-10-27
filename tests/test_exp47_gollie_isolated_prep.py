@@ -260,8 +260,8 @@ def test_modeling_module_must_already_be_local(tmp_path: Path) -> None:
     modeling.parent.mkdir(parents=True)
     modeling.write_text("class Llama: pass\n", encoding="utf-8")
     present = _run(["assert-modeling"], _env(paths, HF_HUB_CACHE=str(cache)))
-    assert present.returncode == 0
-    assert "LOCAL_MODELING" in present.stdout
+    assert present.returncode == 1
+    assert "modeling file size" in present.stderr
     modeling.write_bytes(b"x" * 5_000_001)
     huge = _run(["assert-modeling"], _env(paths, HF_HUB_CACHE=str(cache)))
     assert huge.returncode == 1
@@ -281,6 +281,8 @@ def test_r2_selects_the_isolated_venv_after_env_and_stays_out_of_the_submitter()
     assert text.index("assert-prep") < text.index("assert-modeling") < text.index("j15_gollie_preflight.py")
     assert "HF_HUB_OFFLINE=1" in text
     assert "GOLLIE_R2_PREFLIGHT_AUTHORIZED=1" not in text
+    assert text.index('saved_wheel="${GOLLIE_FLASH_ATTN_WHEEL:-}"') < source_at
+    assert source_at < text.index('export GOLLIE_FLASH_ATTN_WHEEL="${saved_wheel}"')
     assert text.index("isolated J15 is not authorized") < source_at
     assert "unset GOLLIE_J17_SMOKE_AUTHORIZED" in text
     assert "GOLLIE_J17_SMOKE_AUTHORIZED=1" not in text

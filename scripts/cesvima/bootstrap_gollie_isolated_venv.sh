@@ -16,6 +16,47 @@ die() {
   exit 1
 }
 
+creator_is_usable() {
+  env -u PYTHONPATH -u PYTHONHOME -u VIRTUAL_ENV PYTHONNOUSERSITE=1 \
+    "$1" -c 'import sys, venv, ensurepip, pip; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)' \
+    >/dev/null 2>&1
+}
+
+# No CESVIMA Lmod Python path is recorded. Prefer the base interpreter named by
+# gollie-l40s pyvenv.cfg when it is outside the scientific venvs. Otherwise the
+# gollie-l40s executable may create the new venv. It writes only the destination,
+# and the destination is created without system site-packages.
+resolve_gollie_creator() {
+  local original="${GOLLIE_ORIGINAL_VENV:-${SCRATCH_ROOT}/venvs/gollie-l40s}"
+  local home candidate
+  if [[ -n "${GOLLIE_PYTHON312:-}" && "${GOLLIE_PYTHON312}" != *"/venvs/gollie-l40s/"* ]]; then
+    if creator_is_usable "${GOLLIE_PYTHON312}"; then
+      return 0
+    fi
+    die "GOLLIE_PYTHON312 cannot import venv, ensurepip and pip under Python 3.12"
+  fi
+  home=""
+  if [[ -f "${original}/pyvenv.cfg" ]]; then
+    home=$(sed -n 's/^home[[:space:]]*=[[:space:]]*//p' "${original}/pyvenv.cfg" | head -n 1)
+  fi
+  if [[ -n "${home}" && "${home}" != *"/venvs/gollie-l40s"* && "${home}" != *"/venvs/gollie-isolated"* && "${home}" != *"/venvs/uie-train"* && "${home}" != *"/venvs/re_te_system_gpu_312"* && "${home}" != *"/venvs/re_te_system_312"* ]]; then
+    for candidate in "${home}/python3.12" "${home}/python3" "${home}/python"; do
+      if [[ -x "${candidate}" ]] && creator_is_usable "${candidate}"; then
+        export GOLLIE_PYTHON312="${candidate}"
+        echo "CREATOR ${GOLLIE_PYTHON312}"
+        return 0
+      fi
+    done
+  fi
+  candidate="${original}/bin/python"
+  if [[ -x "${candidate}" ]] && creator_is_usable "${candidate}"; then
+    export GOLLIE_PYTHON312="${candidate}"
+    echo "CREATOR ${GOLLIE_PYTHON312}"
+    return 0
+  fi
+  die "no Python 3.12 with venv, ensurepip and pip can create the isolated venv"
+}
+
 require_runtime_env() {
   if [[ -n "${GOLLIE_BOOTSTRAP_ALLOW_COMPILE:-}" ]]; then
     die "FlashAttention compilation is forbidden"
@@ -26,11 +67,13 @@ require_runtime_env() {
   if [[ -z "${GOLLIE_ISOLATED_VENV:-}" ]]; then
     die "GOLLIE_ISOLATED_VENV is required"
   fi
+  export GOLLIE_ORIGINAL_VENV="${GOLLIE_ORIGINAL_VENV:-${SCRATCH_ROOT}/venvs/gollie-l40s}"
+  resolve_gollie_creator
   if [[ -z "${GOLLIE_PYTHON312:-}" || ! -x "${GOLLIE_PYTHON312}" ]]; then
     die "GOLLIE_PYTHON312 must be an executable Python 3.12 interpreter"
   fi
-  if ! "${GOLLIE_PYTHON312}" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)'; then
-    die "GOLLIE_PYTHON312 is not Python 3.12"
+  if ! creator_is_usable "${GOLLIE_PYTHON312}"; then
+    die "GOLLIE_PYTHON312 cannot import venv, ensurepip and pip under Python 3.12"
   fi
 }
 
@@ -193,7 +236,10 @@ inventory_main() {
 }
 
 dry_run_stack() {
-  env \
+  # PYTHONPATH is only this script directory. The creator venv is not inherited.
+  env -u PYTHONHOME -u VIRTUAL_ENV \
+    PYTHONNOUSERSITE=1 \
+    PYTHONPATH="${SCRIPT_DIR}" \
     PIP_NO_INDEX=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_INDEX_URL= \
@@ -257,18 +303,74 @@ resolve_main() {
 }
 
 install_main() {
-  die "R1 install is not authorized"
   if [[ "${GOLLIE_ISOLATED_INSTALL:-}" != "1" ]]; then
-    die "install is disabled; run inventory and set GOLLIE_ISOLATED_INSTALL=1 after the missing wheels are present"
+    die "R1 install is not authorized"
   fi
-  inventory_main quiet
+  require_install_env
+  assert_isolated_path
+  assert_wheel_file
+  wheelhouse_main assert-closed
   if [[ -e "${GOLLIE_ISOLATED_VENV}" || -L "${GOLLIE_ISOLATED_VENV}" ]]; then
     die "isolated venv already exists; refusing to modify it"
   fi
   load_pin_shell_vars
+  set +e
   dry_run_stack
-  "${GOLLIE_PYTHON312}" -m venv "${GOLLIE_ISOLATED_VENV}"
-  env \
+  dry_status=$?
+  set -e
+  DRY_STATUS="${dry_status}" "${GOLLIE_PYTHON312}" - <<'PY'
+import json
+import os
+from pathlib import Path
+
+destination = Path(os.environ["SCRATCH_ROOT"]) / "recovery" / "gollie-offline-resolve.json"
+destination.parent.mkdir(parents=True, exist_ok=True)
+destination.write_text(
+    json.dumps(
+        {
+            "arguments": [
+                "--dry-run",
+                "--ignore-installed",
+                "--no-index",
+                "--find-links",
+                "--only-binary=:all:",
+            ],
+            "exit": int(os.environ["DRY_STATUS"]),
+            "offline_resolve_pass": os.environ["DRY_STATUS"] == "0",
+            "wheelhouse": os.environ["GOLLIE_WHEELHOUSE"],
+        },
+        indent=2,
+        sort_keys=True,
+    )
+    + "\n",
+    encoding="utf-8",
+)
+PY
+  if [[ "${dry_status}" -ne 0 ]]; then
+    die "offline dry-run failed"
+  fi
+  env -u PYTHONPATH -u PYTHONHOME -u VIRTUAL_ENV PYTHONNOUSERSITE=1 \
+    "${GOLLIE_PYTHON312}" -m venv "${GOLLIE_ISOLATED_VENV}"
+  "${GOLLIE_ISOLATED_VENV}/bin/python" - <<'PY'
+import os
+import sys
+from pathlib import Path
+
+isolated = Path(os.environ["GOLLIE_ISOLATED_VENV"]).resolve()
+original = Path(os.environ["GOLLIE_ORIGINAL_VENV"]).resolve()
+prefix = Path(sys.prefix).resolve()
+if prefix != isolated or isolated == original:
+    raise SystemExit("isolated interpreter prefix escaped its venv")
+config = (isolated / "pyvenv.cfg").read_text(encoding="utf-8")
+if "include-system-site-packages = false" not in config:
+    raise SystemExit("isolated venv would inherit another environment")
+if any(original.as_posix() in path for path in sys.path):
+    raise SystemExit("original gollie-l40s is visible on the isolated sys.path")
+print("ISOLATED_PYTHON", sys.executable)
+PY
+  env -u PYTHONHOME -u VIRTUAL_ENV \
+    PYTHONNOUSERSITE=1 \
+    PYTHONPATH="${SCRIPT_DIR}" \
     PIP_NO_INDEX=1 \
     PIP_INDEX_URL= \
     PIP_EXTRA_INDEX_URL= \
@@ -285,7 +387,7 @@ install_main() {
       "triton==${EXPECTED_TRITON_PIN}" \
       "einops==${EXPECTED_EINOPS_PIN}" \
       "huggingface_hub==${EXPECTED_HUGGINGFACE_HUB_PIN}"
-  env \
+  env -u PYTHONPATH -u PYTHONHOME -u VIRTUAL_ENV PYTHONNOUSERSITE=1 \
     PIP_NO_INDEX=1 \
     PIP_INDEX_URL= \
     PIP_EXTRA_INDEX_URL= \
@@ -296,7 +398,7 @@ install_main() {
       --no-deps \
       --disable-pip-version-check \
       "${GOLLIE_FLASH_ATTN_WHEEL}"
-  "${GOLLIE_ISOLATED_VENV}/bin/python" - <<'PY'
+  PYTHONPATH="${SCRIPT_DIR}" "${GOLLIE_ISOLATED_VENV}/bin/python" - <<'PY'
 import importlib.metadata
 import os
 import subprocess
@@ -440,12 +542,14 @@ import j15_gollie_preflight as j15
 cache = Path(os.environ["HF_HUB_CACHE"]).resolve()
 folder = "models--" + j15.GOLLIE_REPO.replace("/", "--")
 path = cache / folder / "snapshots" / j15.GOLLIE_REVISION / j15.MODELING_FILE
-if not path.is_file():
+if path.is_symlink() or not path.is_file():
     print(f"FAIL: {j15.MODELING_FILE} is absent at {path}", file=sys.stderr)
     print("REFUSING_DOWNLOAD modeling file and weights", file=sys.stderr)
     raise SystemExit(1)
-if path.stat().st_size > 5_000_000:
-    print(f"FAIL: {path} is too large to be the modeling module", file=sys.stderr)
+try:
+    j15.audit_modeling_file(path)
+except j15.ModelingIdentityError as exc:
+    print(f"FAIL: {exc}", file=sys.stderr)
     raise SystemExit(1)
 print(f"LOCAL_MODELING {path}")
 PY
@@ -481,7 +585,37 @@ main() {
       fi
       wheelhouse_main recover
       ;;
-    *) die "usage: bootstrap_gollie_isolated_venv.sh [inventory|resolve|install|assert-prep|assert-modeling|missing|download-plan|download|select-cache|materialize|recover]" ;;
+    # Fill the existing EXP.4.9 wheelhouse. Does not install and does not write EXP.4.8.
+    close)
+      if [[ "${GOLLIE_DOWNLOAD_AUTHORIZED:-}" != "1" ]]; then
+        die "wheel download is not authorized"
+      fi
+      wheelhouse_main close
+      ;;
+    assert-closed) wheelhouse_main assert-closed ;;
+    fetch-modeling)
+      if [[ "${GOLLIE_DOWNLOAD_AUTHORIZED:-}" != "1" ]]; then
+        die "wheel download is not authorized"
+      fi
+      require_runtime_env
+      if [[ -z "${HF_HUB_CACHE:-}" ]]; then
+        die "HF_HUB_CACHE is required"
+      fi
+      "${GOLLIE_PYTHON312}" - <<'PY'
+import os
+import sys
+
+import j15_gollie_preflight as j15
+
+try:
+    outcome = j15.ensure_modeling_file(os.environ["HF_HUB_CACHE"], authorized=True)
+except j15.ModelingIdentityError as exc:
+    print(f"FAIL: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+print(f"MODELING_{outcome}")
+PY
+      ;;
+    *) die "usage: bootstrap_gollie_isolated_venv.sh [inventory|resolve|install|assert-prep|assert-modeling|missing|download-plan|download|select-cache|materialize|recover|close|assert-closed|fetch-modeling]" ;;
   esac
 }
 

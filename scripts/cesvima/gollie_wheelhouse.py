@@ -16,6 +16,7 @@ import os
 import re
 import shutil
 import sys
+import urllib.request
 import zipfile
 from pathlib import Path
 
@@ -353,6 +354,47 @@ REPRODUCTION_WHEELS = (
         "url": "https://files.pythonhosted.org/packages/46/0c/c75bbfb967457a0b7670b8ad267bfc4fffdf341c074e0a80db06c24ccfd4/nvidia_nvjitlink_cu12-12.9.86-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl",
         "version": "12.9.86",
     },
+)
+
+# Versions read in gollie-l40s on 2026-10-27. Digests are PyPI JSON, not wheel bodies.
+# A cache file is recovered only when its SHA-256 is one of these digests.
+OBSERVED_TRANSITIVE_WHEELS = (
+    {"name": "click", "version": "8.5.0", "filename": "click-8.5.0-py3-none-any.whl", "sha256": "255bc9599cf7748b4b1a446ccc735421bd08a2ae529a8b88597d3de5664ee360", "url": "https://files.pythonhosted.org/packages/58/50/6c0d534c5f134586a8e1ba4e330569e32f057e33372ae556463212fb4cd3/click-8.5.0-py3-none-any.whl"},
+    {"name": "filelock", "version": "3.32.3", "filename": "filelock-3.32.3-py3-none-any.whl", "sha256": "7f0ca4bcc0e181c60dbbd8aa9ab5b120ebb99e4e064e83636340056f833a1f09", "url": "https://files.pythonhosted.org/packages/a7/8e/50f46a9c0ce8d2861a394c1347caae037ea0431d2f67d7feb151cbc4649a/filelock-3.32.3-py3-none-any.whl"},
+    {"name": "fsspec", "version": "2026.7.0", "filename": "fsspec-2026.7.0-py3-none-any.whl", "sha256": "b57ddbafedfaef7018c1ecab32aa200a9d7ca26b77965f64e48b70061249d279", "url": "https://files.pythonhosted.org/packages/fd/3c/6a2bf344106328fd04963664a60b9bb6496fc25df8e962fcdc1367285fb9/fsspec-2026.7.0-py3-none-any.whl"},
+    {"name": "hf-xet", "version": "1.7.0", "filename": "hf_xet-1.7.0-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", "sha256": "2814a6e999d13464c4d679b788cc5d784eb5a4edfc638a31f10e9a11ab531ef8", "url": "https://files.pythonhosted.org/packages/a3/4c/2bf3b66c215d409655f28de1622393dde04c9461280d48c7924bb3b2decd/hf_xet-1.7.0-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"},
+    {"name": "jinja2", "version": "3.1.6", "filename": "jinja2-3.1.6-py3-none-any.whl", "sha256": "85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67", "url": "https://files.pythonhosted.org/packages/62/a1/3d680cbfd5f4b8f15abc1d571870c5fc3e594bb582bc3b64ea099db13e56/jinja2-3.1.6-py3-none-any.whl"},
+    {"name": "mpmath", "version": "1.3.0", "filename": "mpmath-1.3.0-py3-none-any.whl", "sha256": "a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c", "url": "https://files.pythonhosted.org/packages/43/e3/7d92a15f894aa0c9c4b49b8ee9ac9850d6e63b03c9c32c0367a13ae62209/mpmath-1.3.0-py3-none-any.whl"},
+    {"name": "mypy-extensions", "version": "1.1.0", "filename": "mypy_extensions-1.1.0-py3-none-any.whl", "sha256": "1be4cccdb0f2482337c4743e60421de3a356cd97508abadd57d47403e94f5505", "url": "https://files.pythonhosted.org/packages/79/7b/2c79738432f5c924bef5071f933bcc9efd0473bac3b4aa584a6f7c1c8df8/mypy_extensions-1.1.0-py3-none-any.whl"},
+    {"name": "networkx", "version": "3.6.1", "filename": "networkx-3.6.1-py3-none-any.whl", "sha256": "d47fbf302e7d9cbbb9e2555a0d267983d2aa476bac30e90dfbe5669bd57f3762", "url": "https://files.pythonhosted.org/packages/9e/c9/b2622292ea83fbb4ec318f5b9ab867d0a28ab43c5717bb85b0a5f6b3b0a4/networkx-3.6.1-py3-none-any.whl"},
+    {"name": "numpy", "version": "2.5.4", "filename": "numpy-2.5.4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", "sha256": "fbde6962867ee75b48b0ee29b2b9372ec5d617799dbaf38e82dc0596f2f7738a", "url": "https://files.pythonhosted.org/packages/43/a3/c799c62e19c337e6d3770b08e475887fb30ce8477d3c09efca6b2f0228a6/numpy-2.5.4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"},
+    {"name": "packaging", "version": "26.3", "filename": "packaging-26.3-py3-none-any.whl", "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c", "url": "https://files.pythonhosted.org/packages/63/34/ba1c580383c9eada3711951fef0795c80b829a078d72188184bcab9dd527/packaging-26.3-py3-none-any.whl"},
+    {"name": "pathspec", "version": "1.1.1", "filename": "pathspec-1.1.1-py3-none-any.whl", "sha256": "a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189", "url": "https://files.pythonhosted.org/packages/f1/d9/7fb5aa316bc299258e68c73ba3bddbc499654a07f151cba08f6153988714/pathspec-1.1.1-py3-none-any.whl"},
+    {"name": "platformdirs", "version": "4.13.5", "filename": "platformdirs-4.13.5-py3-none-any.whl", "sha256": "53d3ec4280b815c1e0b02edad7f9ee8fda1ba9c0865dd9c2e6e63849ce82fc1e", "url": "https://files.pythonhosted.org/packages/6c/8a/1d8cb3842909dc193a73835adedf412e32e18f8ffd59f43983949622fe6f/platformdirs-4.13.5-py3-none-any.whl"},
+    {"name": "pyyaml", "version": "6.0.3", "filename": "pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", "sha256": "ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc", "url": "https://files.pythonhosted.org/packages/8b/9d/b3589d3877982d4f2329302ef98a8026e7f4443c765c46cfecc8858c6b4b/pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"},
+    {"name": "regex", "version": "2026.9.29", "filename": "regex-2026.9.29-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", "sha256": "39ab5894d971f9ac68baa6eca5c50387db579cfcacf36ae8df3feceb1815e6d0", "url": "https://files.pythonhosted.org/packages/26/83/d2fbd2e4e3afb1167daa825187d196f313cbaa1a4768f311fb041bb0e3d2/regex-2026.9.29-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"},
+    {"name": "requests", "version": "2.34.2", "filename": "requests-2.34.2-py3-none-any.whl", "sha256": "2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0", "url": "https://files.pythonhosted.org/packages/a0/f4/c67b0b3f1b9245e8d266f0f112c500d50e5b4e83cb6f3b71b6528104182a/requests-2.34.2-py3-none-any.whl"},
+    {"name": "safetensors", "version": "0.8.0", "filename": "safetensors-0.8.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", "sha256": "fd6f3f93c9a0a7cc2788ee63fb763353d4bd2e89b0751bc78fcf7dda00bea774", "url": "https://files.pythonhosted.org/packages/28/50/f203ff3a3ddfe19308efc83c5a3a29ed02bf786732ec35e68bf9162f3365/safetensors-0.8.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"},
+    {"name": "tokenizers", "version": "0.22.2", "filename": "tokenizers-0.22.2-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", "sha256": "369cc9fc8cc10cb24143873a0d95438bb8ee257bb80c71989e3ee290e8d72c67", "url": "https://files.pythonhosted.org/packages/2e/76/932be4b50ef6ccedf9d3c6639b056a967a86258c6d9200643f01269211ca/tokenizers-0.22.2-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"},
+    {"name": "tqdm", "version": "4.70.1", "filename": "tqdm-4.70.1-py3-none-any.whl", "sha256": "c293e525e6fef9c20e8728fd4612df02a0aa31bb5fe91ecd93e123b1b7bffa73", "url": "https://files.pythonhosted.org/packages/a7/03/921a3d3c75785aca9ebfbfcabfbc3a1be12e2ab5265deb026d55a5a3f83e/tqdm-4.70.1-py3-none-any.whl"},
+    {"name": "typing-extensions", "version": "4.16.0", "filename": "typing_extensions-4.16.0-py3-none-any.whl", "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8", "url": "https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl"},
+    {"name": "markupsafe", "version": "3.0.3", "filename": "markupsafe-3.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", "sha256": "d6dd0be5b5b189d31db7cda48b91d7e0a9795f31430b7f271219ab30f1d3ac9d", "url": "https://files.pythonhosted.org/packages/3c/2e/8d0c2ab90a8c1d9a24f0399058ab8519a3279d1bd4289511d74e909f060e/markupsafe-3.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"},
+    {"name": "certifi", "version": "2026.10.23", "filename": "certifi-2026.10.23-py3-none-any.whl", "sha256": "e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1", "url": "https://files.pythonhosted.org/packages/32/d1/a3652fe2c19134d0d15922177821d863cbd7e842d53a21bbe7e8e3a1b5ac/certifi-2026.10.23-py3-none-any.whl"},
+    {"name": "charset-normalizer", "version": "3.5.2", "filename": "charset_normalizer-3.5.2-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", "sha256": "3d31298449090ab8d47b7b1b2a555ff73cac7ed438a08b7ac160980c7ebed649", "url": "https://files.pythonhosted.org/packages/7f/c5/38806a25ab5e65fc178f39affeda20858efafede2fce1ffc2556cfc9fe73/charset_normalizer-3.5.2-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"},
+    {"name": "idna", "version": "3.20", "filename": "idna-3.20-py3-none-any.whl", "sha256": "ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c", "url": "https://files.pythonhosted.org/packages/58/a2/bb081bab032533a855d44de1d56f8e8426114ff1ba5d1f07a438a0a654f8/idna-3.20-py3-none-any.whl"},
+    {"name": "urllib3", "version": "2.8.0", "filename": "urllib3-2.8.0-py3-none-any.whl", "sha256": "0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3", "url": "https://files.pythonhosted.org/packages/92/9d/c4e665119135114480843e7ab388fa94d8480650450e6f8e26b70d323a4c/urllib3-2.8.0-py3-none-any.whl"},
+)
+REUSED_DISTRIBUTIONS = frozenset(
+    {
+        "black",
+        "einops",
+        "huggingface-hub",
+        "nvidia-cudnn-cu12",
+        "sympy",
+        "torch",
+        "transformers",
+        "triton",
+    }
 )
 
 
@@ -861,6 +903,7 @@ def unresolved_transitive() -> list[dict[str, str]]:
     a version.
     """
     reproduced = {canonicalize_name(item["name"]) for item in REPRODUCTION_WHEELS}
+    reproduced.update(canonicalize_name(item["name"]) for item in OBSERVED_TRANSITIVE_WHEELS)
     found = []
     for item in prepared_closure()["unpinned"]:
         name = str(item["name"])
@@ -1277,6 +1320,323 @@ def download_plan() -> dict[str, object]:
     }
 
 
+def closure_catalog() -> tuple[dict[str, object], ...]:
+    """Reused EXP.4.9 wheels plus the official downloads for the observed closure."""
+    catalog: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for item in published_wheels():
+        if canonicalize_name(item["name"]) not in REUSED_DISTRIBUTIONS:
+            continue
+        catalog.append({**item, "download": False, "role": "reused"})
+        seen.add(item["sha256"])
+    for item in recovery_plan()["selective_download"]:
+        if not isinstance(item, dict) or item["sha256"] in seen:
+            continue
+        catalog.append({**item, "download": True, "role": "official"})
+        seen.add(str(item["sha256"]))
+    for item in OBSERVED_TRANSITIVE_WHEELS:
+        if item["sha256"] in seen:
+            raise ValueError(f"duplicate published sha256 {item['sha256']}")
+        filename = item["filename"]
+        tags = [str(tag) for tag in parse_wheel_filename(filename)[3]]
+        if not _tags_are_appropriate(tags):
+            raise ValueError(f"refusing incompatible observed wheel {filename}")
+        host = item["url"].split("/")[2]
+        if host != "files.pythonhosted.org":
+            raise ValueError(f"refusing unofficial host {host}")
+        catalog.append(
+            {
+                **item,
+                "download": True,
+                "provenance": "pypi-json-2026-10-27",
+                "role": "observed",
+            }
+        )
+        seen.add(item["sha256"])
+    return tuple(catalog)
+
+
+def _grouped_catalog(
+    catalog: tuple[dict[str, object], ...] | None = None,
+) -> dict[str, list[dict[str, object]]]:
+    grouped: dict[str, list[dict[str, object]]] = {}
+    for item in closure_catalog() if catalog is None else catalog:
+        grouped.setdefault(canonicalize_name(str(item["name"])), []).append(item)
+    return grouped
+
+
+def _matching_record(payload: bytes, records: list[dict[str, object]]) -> dict[str, object] | None:
+    digest = hashlib.sha256(payload).hexdigest()
+    matches = [item for item in records if item["sha256"] == digest]
+    if len(matches) != 1:
+        return None
+    official = matches[0]
+    inspected = inspect_wheel_bytes(payload, Path(str(official["filename"])))
+    if not inspected.get("zip_ok"):
+        return None
+    if inspected.get("rejection") not in {None, "distribution has no exact pin"}:
+        return None
+    tags = [str(tag) for tag in inspected["tags"]]
+    if not _tags_are_appropriate(tags):
+        return None
+    try:
+        assert_wheel_filename_matches(
+            str(official["filename"]),
+            str(inspected["declared_name"]),
+            str(inspected["declared_version"]),
+            tags,
+        )
+    except (InvalidWheelFilename, ValueError):
+        return None
+    if Version(str(official["version"])) != Version(str(inspected["declared_version"])):
+        return None
+    return official
+
+
+def _place_wheel(payload: bytes, target: Path, digest: str) -> None:
+    if target.exists() or target.is_symlink():
+        raise ValueError(f"refusing to overwrite {target.name}")
+    partial = target.with_name("." + target.name + ".partial")
+    if partial.exists() or partial.is_symlink():
+        raise ValueError(f"refusing to overwrite {partial.name}")
+    try:
+        with partial.open("xb") as handle:
+            handle.write(payload)
+        if hashlib.sha256(partial.read_bytes()).hexdigest() != digest:
+            raise ValueError(f"sha256 mismatch after write: {target.name}")
+        os.link(partial, target)
+    finally:
+        if partial.exists() and not partial.is_symlink():
+            partial.unlink()
+
+
+def _download_official(record: dict[str, object], fetcher) -> bytes:
+    url = str(record["url"])
+    host = url.split("/")[2]
+    if host != "files.pythonhosted.org":
+        raise ValueError(f"refusing unofficial host {host}")
+    payload = fetcher(url)
+    if not isinstance(payload, bytes):
+        raise ValueError("download did not return bytes")
+    if hashlib.sha256(payload).hexdigest() != record["sha256"]:
+        raise ValueError(f"downloaded sha256 does not match {record['filename']}")
+    if _matching_record(payload, [record]) is None:
+        raise ValueError(f"downloaded wheel metadata does not match {record['filename']}")
+    return payload
+
+
+def _default_fetcher(url: str) -> bytes:
+    request = urllib.request.Request(url, headers={"User-Agent": "re_te_system-gollie-wheelhouse"})
+    with urllib.request.urlopen(request, timeout=120) as response:
+        return response.read()
+
+
+def assert_wheelhouse_closed(
+    destination: Path,
+    catalog: tuple[dict[str, object], ...] | None = None,
+) -> dict[str, object]:
+    """Recompute hashes. A version match without the published digest stays blocked."""
+    grouped = _grouped_catalog(catalog)
+    wheels = [
+        path
+        for path in destination.iterdir()
+        if path.is_file() and not path.is_symlink() and path.suffix == ".whl"
+    ]
+    by_hash: dict[str, list[Path]] = {}
+    results = []
+    blocked = []
+    for path in sorted(wheels):
+        payload = path.read_bytes()
+        digest = hashlib.sha256(payload).hexdigest()
+        by_hash.setdefault(digest, []).append(path)
+        owner = [
+            item
+            for records in grouped.values()
+            for item in records
+            if item["sha256"] == digest and item["filename"] == path.name
+        ]
+        if len(owner) != 1 or _matching_record(payload, owner) is None:
+            blocked.append(
+                {
+                    "filename": path.name,
+                    "reason": "wheel is present but its bytes are not a published closure wheel",
+                    "status": "blocked",
+                }
+            )
+            continue
+        results.append(
+            {
+                "filename": path.name,
+                "name": owner[0]["name"],
+                "sha256": digest,
+                "status": "present",
+            }
+        )
+    present_names = {canonicalize_name(str(item["name"])) for item in results}
+    for name, records in sorted(grouped.items()):
+        if name in present_names:
+            continue
+        blocked.append(
+            {
+                "filename": records[0]["filename"],
+                "name": records[0]["name"],
+                "reason": "published wheel is absent from the wheelhouse",
+                "status": "blocked",
+            }
+        )
+    return {
+        "blocked": blocked,
+        "closure_complete": not blocked and len(present_names) == len(grouped),
+        "installable_wheelhouse": False,
+        "offline_resolve_pass": False,
+        "results": results,
+    }
+
+
+def close_wheelhouse(
+    cache: Path,
+    destination: Path,
+    *,
+    download_authorized: bool,
+    scratch_root: Path,
+    catalog: tuple[dict[str, object], ...] | None = None,
+    fetcher=None,
+) -> dict[str, object]:
+    """Recover known wheels from the cache and download only the absent official files."""
+    if download_authorized is not True:
+        raise RuntimeError("wheel download is not authorized")
+    if destination.name == EXP48_WHEELHOUSE_NAME or destination.name != EXP49_WHEELHOUSE_NAME:
+        raise ValueError("refusing to modify the EXP.4.8 wheelhouse")
+    if destination.is_symlink() or not destination.is_dir():
+        raise ValueError("EXP.4.9 wheelhouse must already exist")
+    if not _is_inside(scratch_root, destination):
+        raise ValueError("wheelhouse must stay inside SCRATCH_ROOT")
+    resolved = destination.resolve()
+    if EXP48_WHEELHOUSE_NAME in resolved.parts:
+        raise ValueError("refusing to modify the EXP.4.8 wheelhouse")
+    forbidden = {"gollie-l40s", "gollie-isolated", "uie-train", "re_te_system_gpu_312", "re_te_system_312"}
+    if forbidden & set(resolved.parts):
+        raise ValueError("refusing to write inside a venv path")
+    if cache.is_dir() and not manifest_path_is_outside_cache(cache, destination):
+        raise ValueError("refusing to write the wheelhouse inside the pip cache")
+    grouped = _grouped_catalog(catalog)
+    records = [item for values in grouped.values() for item in values]
+    by_hash = {str(item["sha256"]): item for item in records}
+    results = []
+    blocked = []
+    existing: dict[str, Path] = {}
+    for path in destination.iterdir():
+        if path.name.startswith("."):
+            blocked.append({"filename": path.name, "reason": "partial file left in the wheelhouse", "status": "blocked"})
+            continue
+        if not path.is_file() or path.is_symlink() or path.suffix != ".whl":
+            continue
+        payload = path.read_bytes()
+        official = _matching_record(payload, [by_hash[hashlib.sha256(payload).hexdigest()]]) if hashlib.sha256(payload).hexdigest() in by_hash else None
+        if official is None or official["filename"] != path.name:
+            blocked.append(
+                {
+                    "filename": path.name,
+                    "reason": "wheel is present but its bytes are not a published closure wheel",
+                    "status": "blocked",
+                }
+            )
+            continue
+        name = canonicalize_name(str(official["name"]))
+        if name in existing:
+            blocked.append({"filename": path.name, "reason": f"filename collision for {name}", "status": "blocked"})
+            continue
+        existing[name] = path
+        results.append({"filename": path.name, "name": official["name"], "sha256": official["sha256"], "status": "present"})
+    cache_hits: dict[str, bytes] = {}
+    if cache.is_dir():
+        for origin in iter_cache_bodies(cache):
+            before = origin.stat().st_mtime_ns
+            payload = origin.read_bytes()
+            if origin.stat().st_mtime_ns != before:
+                continue
+            digest = hashlib.sha256(payload).hexdigest()
+            official = by_hash.get(digest)
+            if official is None or _matching_record(payload, [official]) is None:
+                continue
+            cache_hits.setdefault(canonicalize_name(str(official["name"])), payload)
+    fetch = _default_fetcher if fetcher is None else fetcher
+    for name, options in sorted(grouped.items()):
+        if name in existing:
+            continue
+        payload = cache_hits.get(name)
+        chosen = options[0]
+        if payload is not None:
+            chosen = _matching_record(payload, options) or chosen
+            target = destination / str(chosen["filename"])
+            try:
+                _place_wheel(payload, target, str(chosen["sha256"]))
+            except ValueError as exc:
+                blocked.append({"filename": chosen["filename"], "name": chosen["name"], "reason": str(exc), "status": "blocked"})
+                continue
+            results.append(
+                {
+                    "filename": chosen["filename"],
+                    "name": chosen["name"],
+                    "provenance": chosen.get("provenance", "published-sha256"),
+                    "sha256": chosen["sha256"],
+                    "status": "recovered",
+                }
+            )
+            continue
+        downloadable = [item for item in options if item.get("download") is True and item.get("url")]
+        if not downloadable:
+            blocked.append(
+                {
+                    "filename": chosen["filename"],
+                    "name": chosen["name"],
+                    "reason": "reused wheel is absent and will not be downloaded",
+                    "status": "blocked",
+                }
+            )
+            continue
+        chosen = downloadable[0]
+        try:
+            payload = _download_official(chosen, fetch)
+            _place_wheel(payload, destination / str(chosen["filename"]), str(chosen["sha256"]))
+        except Exception as exc:
+            blocked.append(
+                {
+                    "filename": chosen["filename"],
+                    "name": chosen["name"],
+                    "reason": str(exc),
+                    "status": "blocked",
+                }
+            )
+            continue
+        results.append(
+            {
+                "filename": chosen["filename"],
+                "name": chosen["name"],
+                "provenance": chosen.get("provenance", "pypi-json-2026-10-27"),
+                "sha256": chosen["sha256"],
+                "status": "downloaded",
+                "url": chosen["url"],
+            }
+        )
+    report = {
+        "blocked": blocked,
+        "closure_complete": not blocked and len({canonicalize_name(str(item["name"])) for item in results}) == len(grouped),
+        "download_authorized": True,
+        "installable_wheelhouse": False,
+        "offline_resolve_pass": False,
+        "results": results,
+    }
+    (destination / "wheelhouse-close.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    if report["closure_complete"]:
+        lines = [f"{item['sha256']}  {item['filename']}\n" for item in sorted(results, key=lambda item: str(item["filename"]))]
+        (destination / "SHA256SUMS").write_text("".join(lines), encoding="utf-8")
+    return report
+
+
 def fetch_planned_wheels() -> None:
     if DOWNLOAD_AUTHORIZED is not True:
         raise RuntimeError("selective wheel download is not authorized")
@@ -1318,6 +1678,21 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         return 0
+    if args == ["assert-closed"]:
+        report = assert_wheelhouse_closed(Path(os.environ["GOLLIE_WHEELHOUSE"]))
+        _emit(report)
+        return 0 if report["closure_complete"] else 1
+    if args == ["close"]:
+        if os.environ.get("GOLLIE_DOWNLOAD_AUTHORIZED") != "1":
+            raise RuntimeError("wheel download is not authorized")
+        report = close_wheelhouse(
+            Path(os.environ["GOLLIE_PIP_HTTP_CACHE"]),
+            Path(os.environ["GOLLIE_WHEELHOUSE"]),
+            download_authorized=True,
+            scratch_root=Path(os.environ["SCRATCH_ROOT"]),
+        )
+        _emit(report)
+        return 0 if report["closure_complete"] else 1
     if args == ["recover"]:
         if os.environ.get("GOLLIE_RECOVERY_AUTHORIZED") != "1":
             raise RuntimeError("wheelhouse recovery is not authorized")
@@ -1345,7 +1720,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"WHEEL_MANIFEST {manifest}")
         return 0
     print(
-        "usage: gollie_wheelhouse.py [missing|download-plan|download|select-cache|materialize|recover]",
+        "usage: gollie_wheelhouse.py [missing|download-plan|download|select-cache|materialize|recover|close|assert-closed]",
         file=sys.stderr,
     )
     return 1

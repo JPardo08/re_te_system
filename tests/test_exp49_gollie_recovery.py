@@ -20,27 +20,6 @@ import gollie_wheelhouse as wheelhouse  # noqa: E402
 
 
 BOOTSTRAP = SCRIPTS / "bootstrap_gollie_isolated_venv.sh"
-UNRESOLVED = {
-    "click",
-    "filelock",
-    "fsspec",
-    "hf-xet",
-    "jinja2",
-    "mpmath",
-    "mypy-extensions",
-    "networkx",
-    "numpy",
-    "packaging",
-    "pathspec",
-    "platformdirs",
-    "pyyaml",
-    "regex",
-    "requests",
-    "safetensors",
-    "tokenizers",
-    "tqdm",
-    "typing-extensions",
-}
 
 
 def _wheel(path: Path, name: str, version: str) -> None:
@@ -96,9 +75,12 @@ def test_recovery_plan_keeps_the_cuda_pins_and_records_the_two_reproduced_wheels
     assert plan["offline_resolve_pass"] is False
     assert plan["download_authorized"] is False
     assert plan["offline_resolve"] == list(wheelhouse.OFFLINE_RESOLVE_ARGUMENTS)
-    unresolved = {item["name"]: item["status"] for item in plan["unresolved_transitive"]}
-    assert set(unresolved) == UNRESOLVED
-    assert set(unresolved.values()) == {"VERSION_NOT_OBSERVED"}
+    assert plan["unresolved_transitive"] == []
+    observed = {item["name"]: item for item in wheelhouse.OBSERVED_TRANSITIVE_WHEELS}
+    assert len(observed) == 24
+    assert observed["requests"]["sha256"] == "2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0"
+    assert observed["jinja2"]["sha256"] == "85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67"
+    assert observed["markupsafe"]["version"] == "3.0.3"
     unpinned = {item["name"]: item["specifier"] for item in wheelhouse.pending_dependencies()["unpinned"]}
     assert unpinned["nvidia-nvjitlink-cu12"] == ""
     assert unpinned["setuptools"] == ""
@@ -115,7 +97,8 @@ def test_offline_resolve_contract_is_not_a_pass() -> None:
         found = dry_run.index(flag)
         assert found >= previous
         previous = found
-    assert "offline_resolve_pass" not in script
+    assert '"offline_resolve_pass": True' not in script
+    assert 'os.environ["DRY_STATUS"] == "0"' in script
     recover = script.split("    recover)", 1)[1].split("    *)", 1)[0]
     assert "pip" not in recover
     assert "GOLLIE_RECOVERY_AUTHORIZED" in recover
