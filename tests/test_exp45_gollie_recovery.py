@@ -247,6 +247,217 @@ def test_bootstrap_does_not_compile_and_j17_stays_closed(tmp_path: Path) -> None
         env={**os.environ, "GOLLIE_BOOTSTRAP_ALLOW_COMPILE": "1", "GOLLIE_VENV": str(tmp_path)},
     )
     assert forbidden.returncode == 1
+
+
+def _accepted_j15(runs: Path, job: str = "1351016") -> None:
+    report = {
+        "abi_pass": True,
+        "abi_verdict": "pass",
+        "binary_identity": "MATCH",
+        "build_pass": True,
+        "dynamic_dependencies_resolved": True,
+        "flash_attn": FLASH_ATTN_VERSION,
+        "glibc_requirement_satisfied": True,
+        "import_succeeded": True,
+        "installed_extension_sha256": "f" * 64,
+        "kernel_device_family": "L40S",
+        "kernel_finite": True,
+        "node": "r1n1",
+        "preflight_pass": True,
+        "slurm_job_id": job,
+        "status": "PREFLIGHT_PASS",
+        "weights_downloaded": False,
+        "wheel_extension_sha256": "f" * 64,
+        "wheel_sha256": FLASH_ATTN_WHEEL_SHA256,
+    }
+    path = runs / "gollie" / "preflight" / "jobs" / job / "preflight_report.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(report), encoding="utf-8")
+    (runs / "gollie" / "preflight" / "accepted_job_id.txt").write_text(job + "\n", encoding="utf-8")
+
+
+def _isolated_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    scratch = tmp_path / "scratch"
+    runs = scratch / "runs"
+    venv = scratch / "venvs" / "gollie-isolated"
+    original = scratch / "venvs" / "gollie-l40s"
+    cache = scratch / "hf-cache" / "hub"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").symlink_to(Path(sys.executable))
+    original.mkdir(parents=True)
+    cache.mkdir(parents=True)
+    monkeypatch.setenv("SCRATCH_ROOT", str(scratch))
+    monkeypatch.setenv("P3_RUNS_ROOT", str(runs))
+    monkeypatch.setenv("HF_HUB_CACHE", str(cache))
+    monkeypatch.setenv("GOLLIE_VENV", str(venv))
+    monkeypatch.setenv("GOLLIE_ORIGINAL_VENV", str(original))
+    monkeypatch.setenv("SLURM_JOB_ID", "1351100")
+    monkeypatch.delenv("GOLLIE_J16_DOWNLOAD_AUTHORIZED", raising=False)
+    monkeypatch.setattr(
+        j16.shutil,
+        "disk_usage",
+        lambda _path: type("Usage", (), {"free": j16.SCRATCH_FREE_BYTES})(),
+    )
+    return scratch, runs
+
+
+def _complete_snapshot(cache: Path) -> Path:
+    snapshot_dir = (
+        cache
+        / "models--HiTZ--GoLLIE-7B"
+        / "snapshots"
+        / j16.GOLLIE_REVISION
+    )
+    snapshot_dir.mkdir(parents=True)
+    (snapshot_dir / "config.json").write_text("{}\n", encoding="utf-8")
+    (snapshot_dir / "modeling_flash_llama.py").write_bytes(b"x" * j16.MODELING_SIZE)
+    (snapshot_dir / "model.safetensors").write_bytes(b"weights")
+    return snapshot_dir
+
+
+def test_j16_uses_the_isolated_venv_and_records_a_complete_download(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scratch, runs = _isolated_runtime(tmp_path, monkeypatch)
+    _accepted_j15(runs)
+    snapshot_dir = _complete_snapshot(scratch / "hf-cache" / "hub")
+    calls: list[str] = []
+
+    def local_hit() -> Path:
+        calls.append("local")
+        return snapshot_dir
+
+    def explode(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("weights were downloaded")
+
+    monkeypatch.setattr(j16, "_local_complete_snapshot", local_hit)
+    monkeypatch.setattr(j16, "probe_repository_access", explode)
+    monkeypatch.setattr(j16, "cache_or_download", explode)
+    monkeypatch.setenv("GOLLIE_J16_DOWNLOAD_AUTHORIZED", "1")
+    assert j16.main() == 0
+    assert calls == ["local"]
+    pointer = runs / "gollie" / "download" / "accepted_job_id.txt"
+    report = json.loads(
+        (runs / "gollie" / "download" / "jobs" / "1351100" / "download_report.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert pointer.read_text(encoding="utf-8") == "1351100\n"
+    assert report["status"] == "DOWNLOAD_PASS"
+    assert report["checkpoint_complete"] is True
+    assert report["revision"] == j16.GOLLIE_REVISION
+    assert report["weight_files"] == ["model.safetensors"]
+    assert report["venv"].endswith("/venvs/gollie-isolated")
+    assert GOLLIE_J16_DOWNLOAD_AUTHORIZED is False
+    with pytest.raises(SystemExit):
+        j16.main()
+    assert j16.assert_j17_prerequisites(runs)["status"] == "DOWNLOAD_PASS"
+
+
+def test_j16_checks_access_before_a_missing_snapshot_and_rejects_bad_conditions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    scratch, runs = _isolated_runtime(tmp_path, monkeypatch)
+    _accepted_j15(runs)
+    snapshot_dir = _complete_snapshot(scratch / "hf-cache" / "hub")
+    order: list[str] = []
+
+    monkeypatch.setattr(j16, "_local_complete_snapshot", lambda: None)
+    monkeypatch.setattr(
+        j16,
+        "probe_repository_access",
+        lambda repo, revision: order.append(f"access:{repo}@{revision}"),
+    )
+
+    def fetch(repo: str, revision: str, pointer: Path) -> Path:
+        order.append("download")
+        assert repo == j16.GOLLIE_REPO
+        assert revision == j16.GOLLIE_REVISION
+        assert pointer == runs / "gollie" / "snapshot.json"
+        return snapshot_dir
+
+    monkeypatch.setattr(j16, "cache_or_download", fetch)
+    monkeypatch.setenv("GOLLIE_J16_DOWNLOAD_AUTHORIZED", "1")
+    assert j16.main() == 0
+    assert order == [f"access:{j16.GOLLIE_REPO}@{j16.GOLLIE_REVISION}", "download"]
+
+    _scratch, original_runs = _isolated_runtime(tmp_path / "original", monkeypatch)
+    _accepted_j15(original_runs)
+    monkeypatch.setenv("GOLLIE_VENV", str(tmp_path / "original" / "scratch" / "venvs" / "gollie-l40s"))
+    monkeypatch.setenv("GOLLIE_J16_DOWNLOAD_AUTHORIZED", "1")
+
+    def explode(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("weights were downloaded")
+
+    monkeypatch.setattr(j16, "cache_or_download", explode)
+    monkeypatch.setattr(j16, "probe_repository_access", explode)
+    capsys.readouterr()
+    with pytest.raises(SystemExit):
+        j16.main()
+    assert "gollie-isolated" in capsys.readouterr().out
+
+    space, space_runs = _isolated_runtime(tmp_path / "space", monkeypatch)
+    _accepted_j15(space_runs)
+    monkeypatch.setenv("GOLLIE_J16_DOWNLOAD_AUTHORIZED", "1")
+    monkeypatch.setattr(
+        j16.shutil,
+        "disk_usage",
+        lambda _path: type("Usage", (), {"free": j16.SCRATCH_FREE_BYTES - 1})(),
+    )
+    monkeypatch.setattr(j16, "_local_complete_snapshot", lambda: None)
+    with pytest.raises(SystemExit):
+        j16.main()
+    assert "free space" in capsys.readouterr().out
+
+    status = j16._access_status(type("HttpError", (), {"response": type("Response", (), {"status_code": 401})()})())
+    assert status == 401
+    incomplete = space / "hf-cache" / "hub" / "partial"
+    incomplete.mkdir(parents=True)
+    (incomplete / "config.json").write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        j16.shutil,
+        "disk_usage",
+        lambda _path: type("Usage", (), {"free": j16.SCRATCH_FREE_BYTES})(),
+    )
+    with pytest.raises(SystemExit):
+        j16.assert_snapshot_complete(incomplete)
+    assert "modeling module" in capsys.readouterr().out
+    monkeypatch.setenv("GOLLIE_VENV", str(space / "venvs" / "gollie-l40s"))
+    with pytest.raises(SystemExit):
+        j16.assert_j17_prerequisites(space_runs)
+    assert "gollie-isolated" in capsys.readouterr().out
+
+
+def test_j16_and_j17_sbatch_select_the_isolated_venv_without_a_global_grant() -> None:
+    j16_text = (ROOT / "jobs" / "cesvima" / "j16_gollie_download.sbatch").read_text(encoding="utf-8")
+    j17_text = (ROOT / "jobs" / "cesvima" / "j17_gollie_native_smoke.sbatch").read_text(encoding="utf-8")
+    smoke = (SCRIPTS / "j17_gollie_native_smoke.sh").read_text(encoding="utf-8")
+    for text in (j16_text, j17_text):
+        source = text.index("source /home/y064/PROJECT/y064644/paper3/re_te_system/scripts/cesvima/env.sh")
+        assert source < text.index('export GOLLIE_VENV="${GOLLIE_ISOLATED_VENV}"')
+        assert "gollie-l40s" in text
+        assert "submit_train_first.sh" not in text
+    assert "GOLLIE_J16_DOWNLOAD_AUTHORIZED=1" not in j16_text
+    assert "GOLLIE_J17_SMOKE_AUTHORIZED=1" not in j17_text
+    assert 'saved_download="${GOLLIE_J16_DOWNLOAD_AUTHORIZED:-}"' in j16_text
+    assert source_before_restore(j16_text, 'export GOLLIE_J16_DOWNLOAD_AUTHORIZED="${saved_download}"')
+    assert "unset HF_HUB_OFFLINE" in j16_text
+    assert "HF_HUB_OFFLINE=1" in j17_text
+    assert "official_re_documents.jsonl" in smoke
+    assert "d3e41fef45f6a7d438c46ba7d9fce5d0d486c7a9" in smoke
+    assert "assert_j17_prerequisites" in smoke
+    assert GOLLIE_J16_DOWNLOAD_AUTHORIZED is False
+    assert GOLLIE_J17_SMOKE_AUTHORIZED is False
+    pin = (SCRIPTS / "flash_attn_pin.py").read_text(encoding="utf-8")
+    assert "GOLLIE_J16_DOWNLOAD_AUTHORIZED = False" in pin
+    assert "GOLLIE_J17_SMOKE_AUTHORIZED = False" in pin
+
+
+def source_before_restore(text: str, restore: str) -> bool:
+    return text.index("source /home/y064/PROJECT/y064644/paper3/re_te_system/scripts/cesvima/env.sh") < text.index(restore)
     python = tmp_path / "venv" / "bin" / "python"
     python.parent.mkdir(parents=True)
     python.write_text("#!/bin/bash\nexit 2\n", encoding="utf-8")

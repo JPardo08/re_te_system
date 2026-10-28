@@ -8,6 +8,14 @@ if [[ "${GOLLIE_J17_SMOKE_AUTHORIZED:-}" != "1" ]]; then
   exit 1
 fi
 PYTHON="${GOLLIE_VENV}/bin/python"
+"${PYTHON}" - <<'PY'
+import os
+from pathlib import Path
+
+from j16_gollie_download import assert_j17_prerequisites
+
+assert_j17_prerequisites(Path(os.environ["P3_RUNS_ROOT"]))
+PY
 OUTPUT_ROOT="${P3_RUNS_ROOT}/gollie/native-smoke"
 mkdir -p "${OUTPUT_ROOT}"
 RUN_JSON="$("${PYTHON}" -m re_te_system.cli run \
