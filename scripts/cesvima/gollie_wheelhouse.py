@@ -23,15 +23,7 @@ from pathlib import Path
 from packaging.markers import default_environment
 from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet
-from packaging.tags import (
-    InvalidTag,
-    Tag,
-    TooManyTagsError,
-    UnsortedTagsError,
-    compatible_tags,
-    cpython_tags,
-    parse_tag,
-)
+from packaging.tags import Tag, compatible_tags, cpython_tags, parse_tag
 from packaging.utils import InvalidWheelFilename, canonicalize_name, parse_wheel_filename
 from packaging.version import Version
 
@@ -682,7 +674,9 @@ def _tags_are_appropriate(tags: list[str]) -> bool:
     for raw in tags:
         try:
             parsed = parse_tag(raw)
-        except (InvalidTag, TooManyTagsError, UnsortedTagsError, ValueError):
+        except ValueError:
+            # Older packaging.tags rejects a malformed tag with ValueError.
+            # Do not name exceptions added by packaging 26.3; CESVIMA lacks them.
             return False
         if parsed & accepted:
             matched = True

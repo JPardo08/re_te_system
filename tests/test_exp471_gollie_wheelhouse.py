@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import stat
 import subprocess
 import sys
+import types
 import zipfile
 from pathlib import Path
 
@@ -343,3 +345,56 @@ def test_resolve_uses_a_clean_index_free_dry_run_and_install_stays_closed(tmp_pa
     assert "C0/C1 Gold inference is not authorized" in gold
     assert GOLLIE_J16_DOWNLOAD_AUTHORIZED is False
     assert GOLLIE_J17_SMOKE_AUTHORIZED is False
+
+
+def test_wheelhouse_imports_without_newer_packaging_tag_exceptions() -> None:
+    import packaging.tags as real_tags
+
+    def legacy_parse_tag(tag: str) -> frozenset[Tag]:
+        interpreters, abis, platforms = tag.split("-")
+        return frozenset(
+            Tag(interpreter, abi, platform)
+            for interpreter in interpreters.split(".")
+            for abi in abis.split(".")
+            for platform in platforms.split(".")
+        )
+
+    stub = types.ModuleType("packaging.tags")
+    stub.Tag = real_tags.Tag
+    stub.compatible_tags = real_tags.compatible_tags
+    stub.cpython_tags = real_tags.cpython_tags
+    stub.parse_tag = legacy_parse_tag
+    for name in ("InvalidTag", "TooManyTagsError", "UnsortedTagsError"):
+        assert not hasattr(stub, name)
+    saved = sys.modules.get("packaging.tags")
+    sys.modules["packaging.tags"] = stub
+    sys.modules.pop("gollie_wheelhouse_legacy_tags", None)
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "gollie_wheelhouse_legacy_tags",
+            SCRIPTS / "gollie_wheelhouse.py",
+        )
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+    finally:
+        if saved is None:
+            sys.modules.pop("packaging.tags", None)
+        else:
+            sys.modules["packaging.tags"] = saved
+        sys.modules.pop("gollie_wheelhouse_legacy_tags", None)
+    source = (SCRIPTS / "gollie_wheelhouse.py").read_text(encoding="utf-8")
+    assert "InvalidTag" not in source
+    assert "TooManyTagsError" not in source
+    assert "UnsortedTagsError" not in source
+    assert module._tags_are_appropriate(["cp312-cp312-manylinux_2_17_x86_64"]) is True
+    assert module._tags_are_appropriate(["py3-none-manylinux2014_x86_64"]) is True
+    assert module._tags_are_appropriate(["cp39-abi3-manylinux2014_x86_64"]) is True
+    assert module._tags_are_appropriate(["py3-none-manylinux_2_31_x86_64"]) is False
+    assert module._tags_are_appropriate(["py3-none-macosx_14_0_arm64"]) is False
+    assert module._tags_are_appropriate(["cp312-cp312"]) is False
+    assert module.TARGET_PYTHON == (3, 12)
+    assert module.TARGET_GLIBC == (2, 28)
+    assert Tag("cp312", "cp312", "manylinux_2_28_x86_64") in module.target_tag_set()
+    assert Tag("cp312", "cp312", "manylinux_2_31_x86_64") not in module.target_tag_set()
