@@ -12,6 +12,11 @@ from re_te_system.conditioning.gollie_schema import (
     GoLLIESchema,
 )
 from re_te_system.contracts import ExtractionContext, RawExtractionResult
+from re_te_system.extractors.gollie_flash_rope import (
+    assert_gollie_rope_runtime,
+    flash_rope_eager_launch,
+    rope_compatibility_record,
+)
 
 
 CANONICAL_GOLLIE_MODEL_ID = "HiTZ/GoLLIE-7B"
@@ -256,6 +261,8 @@ class GoLLIEExtractor:
             ) from exc
 
         _require_cuda_flash_attention()
+        assert_gollie_rope_runtime()
+        self.rope_compatibility = rope_compatibility_record()
         dtype = getattr(torch, config.dtype, None)
         if dtype is None or not isinstance(dtype, torch.dtype):
             raise ValueError(f"unsupported torch dtype: {config.dtype}")
@@ -311,8 +318,9 @@ class GoLLIEExtractor:
             input_ids = input_ids[: self.effective_input_limit]
         tensor = torch.tensor([input_ids], device=self.device)
         attention = torch.ones_like(tensor)
-        with torch.inference_mode():
-            generated = self.model.generate(
+
+        def _generate() -> Any:
+            return self.model.generate(
                 input_ids=tensor,
                 attention_mask=attention,
                 do_sample=False,
@@ -322,6 +330,13 @@ class GoLLIEExtractor:
                 num_return_sequences=1,
                 return_dict_in_generate=True,
             )
+
+        with torch.inference_mode():
+            if getattr(self, "rope_compatibility", None) is None:
+                generated = _generate()
+            else:
+                with flash_rope_eager_launch(self.model):
+                    generated = _generate()
         sequence = generated.sequences[0]
         continuation = sequence[tensor.shape[-1] :]
         model_output = self.tokenizer.decode(

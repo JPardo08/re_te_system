@@ -230,12 +230,13 @@ def run_pipeline(
         controlled_experiment_condition=controlled_experiment_condition,
         code_commit=code_commit,
     )
-    compatibility = getattr(extractor, "cache_compatibility", None)
-    if compatibility is not None:
-        manifest["operational_metadata"] = {
-            **manifest["operational_metadata"],
-            "cache_compatibility": dict(compatibility),
-        }
+    operational = dict(manifest["operational_metadata"])
+    for key in ("cache_compatibility", "rope_compatibility"):
+        value = getattr(extractor, key, None)
+        if value is not None:
+            operational[key] = dict(value)
+    if operational != manifest["operational_metadata"]:
+        manifest["operational_metadata"] = operational
     run_dir = Path(output_root) / manifest["run_id"]
     run_dir.mkdir(parents=True, exist_ok=True)
     predictions: list[dict[str, Any]] = []
