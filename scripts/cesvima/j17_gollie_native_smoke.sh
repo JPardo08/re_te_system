@@ -8,14 +8,18 @@ if [[ "${GOLLIE_J17_SMOKE_AUTHORIZED:-}" != "1" ]]; then
   exit 1
 fi
 PYTHON="${GOLLIE_VENV}/bin/python"
-"${PYTHON}" - <<'PY'
+DERIVED="$("${PYTHON}" - <<'PY'
 import os
 from pathlib import Path
 
+from gollie_safetensors_conversion import assert_j17_conversion
 from j16_gollie_download import assert_j17_prerequisites
 
-assert_j17_prerequisites(Path(os.environ["P3_RUNS_ROOT"]))
+runs = Path(os.environ["P3_RUNS_ROOT"])
+assert_j17_prerequisites(runs)
+print(assert_j17_conversion(runs)["derived_path"])
 PY
+)"
 OUTPUT_ROOT="${P3_RUNS_ROOT}/gollie/native-smoke"
 mkdir -p "${OUTPUT_ROOT}"
 RUN_JSON="$("${PYTHON}" -m re_te_system.cli run \
@@ -25,6 +29,7 @@ RUN_JSON="$("${PYTHON}" -m re_te_system.cli run \
   --output-root "${OUTPUT_ROOT}" \
   --model-name HiTZ/GoLLIE-7B \
   --model-revision d3e41fef45f6a7d438c46ba7d9fce5d0d486c7a9 \
+  --gollie-weight-snapshot "${DERIVED}" \
   --local-files-only \
   --device cuda \
   --dtype bfloat16 \

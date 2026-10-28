@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any
 
 from re_te_system.conditioning.gollie_schema import (
@@ -37,6 +39,7 @@ class GoLLIEConfig:
     quantization: str = "none"
     flash_attention: bool = True
     local_files_only: bool = True
+    weight_snapshot: str | None = None
 
     def __post_init__(self) -> None:
         if not self.revision:
@@ -85,6 +88,57 @@ def causal_effective_input_limit(model_max_length: int, max_new_tokens: int) -> 
     return limit
 
 
+def assert_safetensors_snapshot(snapshot: Path) -> None:
+    """Refuse a GoLLIE directory that could fall back to pytorch bins."""
+    if snapshot.is_symlink() or not snapshot.is_dir():
+        raise ValueError("GoLLIE safetensors snapshot is not a real directory")
+    index_path = snapshot / "model.safetensors.index.json"
+    if index_path.is_symlink() or not index_path.is_file():
+        raise ValueError("GoLLIE safetensors index is absent")
+    for candidate in snapshot.rglob("*"):
+        if candidate.name.endswith(".bin") or candidate.name == "pytorch_model.bin.index.json":
+            raise ValueError(f"refusing pytorch weights in the GoLLIE snapshot: {candidate.name}")
+    try:
+        payload = json.loads(index_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("GoLLIE safetensors index is malformed") from exc
+    mapping = payload.get("weight_map") if isinstance(payload, dict) else None
+    if not isinstance(mapping, dict) or not mapping:
+        raise ValueError("GoLLIE safetensors index is empty")
+    for name in mapping.values():
+        if not isinstance(name, str) or not name.endswith(".safetensors") or name != Path(name).name:
+            raise ValueError("GoLLIE safetensors index is malformed")
+        weight = snapshot / name
+        if weight.is_symlink() or not weight.is_file() or weight.stat().st_size == 0:
+            raise ValueError(f"GoLLIE safetensors weight is absent: {name}")
+    config = snapshot / "config.json"
+    if config.is_symlink() or not config.is_file() or config.stat().st_size == 0:
+        raise ValueError("GoLLIE config.json is absent")
+
+
+def resolve_gollie_weights(config: GoLLIEConfig) -> tuple[str, dict[str, object]]:
+    """Load only a verified local Safetensors snapshot.
+
+    The scientific identity stays HiTZ/GoLLIE-7B at the pinned revision. The
+    hub repository is not a load path: Transformers 4.57.6 refuses its .bin
+    shards on torch 2.5.1, and this call does not fall back to them.
+    """
+    if config.model_name != CANONICAL_GOLLIE_MODEL_ID or config.revision != CANONICAL_GOLLIE_REVISION:
+        raise ValueError("GoLLIE scientific identity is HiTZ/GoLLIE-7B at the pinned revision")
+    if not config.local_files_only:
+        raise ValueError("GoLLIE refuses a network weight load")
+    snapshot = (config.weight_snapshot or "").strip()
+    if not snapshot:
+        raise ValueError("GoLLIE requires the verified safetensors snapshot; refusing pytorch bins")
+    path = Path(snapshot)
+    assert_safetensors_snapshot(path)
+    return str(path), {
+        "local_files_only": True,
+        "trust_remote_code": True,
+        "use_safetensors": True,
+    }
+
+
 def _require_cuda_flash_attention() -> None:
     try:
         import torch
@@ -129,26 +183,21 @@ class GoLLIEExtractor:
         self.config = config
         self.model_name = config.model_name
         self.tokenizer_name = config.tokenizer_name or config.model_name
-        load_options = {
-            "revision": config.revision,
-            "local_files_only": config.local_files_only,
-            "trust_remote_code": True,
-        }
+        source, load_options = resolve_gollie_weights(config)
         self.tokenizer = AutoTokenizer.from_pretrained(
-            self.tokenizer_name,
+            source,
             add_eos_token=True,
-            **load_options,
+            local_files_only=True,
+            trust_remote_code=True,
         )
         self.model = AutoModelForCausalLM.from_pretrained(
-            config.model_name,
+            source,
             torch_dtype=dtype,
             **load_options,
         ).eval()
         self.device = torch.device("cuda")
         self.model.to(self.device)
-        self.model_revision = (
-            getattr(self.model.config, "_commit_hash", None) or config.revision
-        )
+        self.model_revision = config.revision
         tokenizer_limit = int(getattr(self.tokenizer, "model_max_length", 16384))
         self.model_max_length = tokenizer_limit if tokenizer_limit < 1_000_000 else 16384
         self.effective_input_limit = causal_effective_input_limit(

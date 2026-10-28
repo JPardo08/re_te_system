@@ -204,6 +204,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--uie-training-manifest")
     run.add_argument("--gollie-schema-file")
     run.add_argument("--gollie-max-new-tokens", type=int, default=128)
+    run.add_argument("--gollie-weight-snapshot")
     run.add_argument(
         "--genie-constraint-profile",
         choices=(
@@ -630,6 +631,7 @@ def main(argv: list[str] | None = None) -> int:
             max_new_tokens=args.gollie_max_new_tokens,
             seed=args.seed,
             local_files_only=True,
+            weight_snapshot=args.gollie_weight_snapshot,
         )
         extractor = GoLLIEExtractor(schema=schema, config=config)
         parse_output = partial(parse_gollie, schema=schema)
