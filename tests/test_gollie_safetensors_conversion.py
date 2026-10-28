@@ -348,3 +348,83 @@ def test_j17_accepts_only_a_verified_conversion_outside_the_gpu_runtime(
     assert "gollie-isolated" in sbatch
     assert "gollie_safetensors_convert.sbatch" not in submitter
     assert "--all" not in sbatch
+
+
+_SHARDS = (
+    "pytorch_model-00001-of-00002.bin",
+    "pytorch_model-00002-of-00002.bin",
+)
+
+
+def _shard_hashes(origin: Path) -> dict[str, str]:
+    return {name: sha256_file(origin / name) for name in _SHARDS}
+
+
+def test_ordinary_pycache_is_omitted_and_unsafe_entries_leave_no_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    scratch = tmp_path / "allowed"
+    origin = _origin(scratch)
+    _two_shards(origin)
+    cached = origin / "__pycache__"
+    cached.mkdir()
+    (cached / "modeling_flash_llama.cpython-312.pyc").write_bytes(b"cached")
+    before = _shard_hashes(origin)
+    destination = scratch / "models" / "derived"
+    indexed = sum((origin / name).stat().st_size for name in _SHARDS)
+    report = conversion.convert_indexed_checkpoint(
+        origin,
+        destination,
+        expected_bytes=indexed,
+        scratch=scratch,
+    )
+    assert not (destination / "__pycache__").exists()
+    assert "__pycache__" not in report["copied_files"]
+    assert "__pycache__" not in report["ignored_weight_files"]
+    assert (cached / "modeling_flash_llama.cpython-312.pyc").read_bytes() == b"cached"
+    assert _shard_hashes(origin) == before
+
+    def plant_symlink(snapshot: Path) -> None:
+        target = snapshot.parent / "elsewhere"
+        target.mkdir()
+        (snapshot / "__pycache__").symlink_to(target, target_is_directory=True)
+
+    def plant_file(snapshot: Path) -> None:
+        (snapshot / "__pycache__").write_text("not-a-directory\n", encoding="utf-8")
+
+    def plant_directory(snapshot: Path) -> None:
+        (snapshot / "blobs").mkdir()
+
+    def plant_incomplete(snapshot: Path) -> None:
+        (snapshot / "model.incomplete").write_bytes(b"partial")
+
+    def refuse(name: str, message: str, plant) -> None:
+        root = tmp_path / name
+        runtime_scratch, runs, models = _runtime(root, monkeypatch)
+        snapshot = _origin(runtime_scratch)
+        _two_shards(snapshot)
+        _j16(runs, snapshot)
+        original = _shard_hashes(snapshot)
+        plant(snapshot)
+        monkeypatch.setattr(
+            conversion,
+            "INDEXED_SHARD_BYTES",
+            sum((snapshot / shard).stat().st_size for shard in _SHARDS),
+        )
+        monkeypatch.setattr(conversion, "_runtime_prefix_name", lambda: "cpu-torch26")
+        monkeypatch.setenv("GOLLIE_SAFETENSORS_CONVERT_AUTHORIZED", "1")
+        with pytest.raises(SystemExit):
+            conversion.main()
+        assert message in capsys.readouterr().out
+        derived = conversion.derived_snapshot_dir(models)
+        assert not conversion.conversion_pointer(runs).exists()
+        assert not derived.exists()
+        assert not derived.with_name(derived.name + ".partial").exists()
+        assert _shard_hashes(snapshot) == original
+
+    refuse("symlink", "__pycache__ is a symlink", plant_symlink)
+    refuse("structure", "__pycache__ has an unexpected structure", plant_file)
+    refuse("unknown", "unexpected directory in the origin snapshot: blobs", plant_directory)
+    refuse("incomplete", "origin snapshot has an incomplete download", plant_incomplete)

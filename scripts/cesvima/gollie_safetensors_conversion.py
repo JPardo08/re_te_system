@@ -276,6 +276,14 @@ def convert_indexed_checkpoint(
         ignored: list[str] = []
         copied: dict[str, dict[str, object]] = {}
         for entry in sorted(origin.iterdir(), key=lambda item: item.name):
+            if entry.name == "__pycache__":
+                if entry.is_symlink():
+                    fail("__pycache__ is a symlink")
+                if not entry.is_dir():
+                    fail("__pycache__ has an unexpected structure")
+                if not _inside(origin, entry.resolve()):
+                    fail("__pycache__ escapes the origin snapshot")
+                continue
             if entry.name.endswith(".incomplete"):
                 fail("origin snapshot has an incomplete download")
             if entry.is_dir():
