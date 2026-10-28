@@ -568,6 +568,13 @@ def _rejection(name: str, version: str) -> str | None:
     allowed = _allowed_exact()
     if canonical in {"torch", "triton"} and allowed.get(canonical) != version:
         return "version is outside the pinned stack"
+    recorded_nvjitlink = {
+        canonicalize_name(str(item["name"])): str(item["version"])
+        for item in REPRODUCTION_WHEELS
+        if canonicalize_name(str(item["name"])) == "nvidia-nvjitlink-cu12"
+    }
+    if recorded_nvjitlink.get(canonical) == version:
+        return None
     if canonical.startswith("nvidia-") and allowed.get(canonical) != version:
         return "nvidia version is outside the cu121 closure"
     if canonical in allowed and allowed[canonical] != version:
@@ -575,6 +582,20 @@ def _rejection(name: str, version: str) -> str | None:
     if canonical not in allowed:
         return "distribution has no exact pin"
     return None
+
+
+def _root_dist_info_members(names: list[str], member: str) -> list[str]:
+    """The wheel's own metadata is the root .dist-info directory.
+
+    A vendored copy such as setuptools/_vendor/packaging-24.2.dist-info is not
+    a second identity for the wheel.
+    """
+    found = []
+    for name in names:
+        parent, slash, leaf = name.partition("/")
+        if slash and leaf == member and parent.endswith(".dist-info"):
+            found.append(name)
+    return found
 
 
 def inspect_wheel_bytes(payload: bytes, origin: Path) -> dict[str, object]:
@@ -595,8 +616,8 @@ def inspect_wheel_bytes(payload: bytes, origin: Path) -> dict[str, object]:
             if broken is not None:
                 record["rejection"] = f"zip integrity failed: {broken}"
                 return record
-            metadata_names = [name for name in archive.namelist() if name.endswith(".dist-info/METADATA")]
-            wheel_names = [name for name in archive.namelist() if name.endswith(".dist-info/WHEEL")]
+            metadata_names = _root_dist_info_members(archive.namelist(), "METADATA")
+            wheel_names = _root_dist_info_members(archive.namelist(), "WHEEL")
             if len(metadata_names) != 1 or len(wheel_names) != 1:
                 record["rejection"] = "wheel metadata is ambiguous"
                 return record

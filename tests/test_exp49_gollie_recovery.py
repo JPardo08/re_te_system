@@ -207,3 +207,232 @@ def test_recovery_refuses_without_authorization_and_does_not_open_install() -> N
     )
     assert completed.returncode == 1
     assert "not authorized" in completed.stderr
+
+
+def _tagged_wheel(
+    path: Path,
+    name: str,
+    version: str,
+    tags: list[str],
+    *,
+    vendor: bool = False,
+    second_root: bool = False,
+) -> bytes:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    info = f"{name.replace('-', '_')}-{version}.dist-info"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(f"{info}/METADATA", f"Name: {name}\nVersion: {version}\n")
+        archive.writestr(
+            f"{info}/WHEEL",
+            "Wheel-Version: 1.0\nRoot-Is-Purelib: true\n"
+            + "".join(f"Tag: {tag}\n" for tag in tags),
+        )
+        if vendor:
+            archive.writestr(
+                f"{name}/_vendor/packaging-24.2.dist-info/METADATA",
+                "Name: packaging\nVersion: 24.2\n",
+            )
+            archive.writestr(
+                f"{name}/_vendor/packaging-24.2.dist-info/WHEEL",
+                "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+            )
+        if second_root:
+            archive.writestr("other-1.0.0.dist-info/METADATA", "Name: other\nVersion: 1.0.0\n")
+            archive.writestr(
+                "other-1.0.0.dist-info/WHEEL",
+                "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+            )
+    return path.read_bytes()
+
+
+def _reproduction(name: str) -> dict[str, object]:
+    return next(item for item in wheelhouse.REPRODUCTION_WHEELS if item["name"] == name)
+
+
+def _with_payload(record: dict[str, object], payload: bytes) -> dict[str, object]:
+    return {**record, "download": True, "sha256": hashlib.sha256(payload).hexdigest()}
+
+
+NV_TAGS = ["py3-none-manylinux2010_x86_64", "py3-none-manylinux_2_12_x86_64"]
+
+
+def test_recorded_reproduction_wheels_match_name_version_and_tags(tmp_path: Path) -> None:
+    setuptools = _reproduction("setuptools")
+    nvjitlink = _reproduction("nvidia-nvjitlink-cu12")
+    setup_payload = _tagged_wheel(
+        tmp_path / str(setuptools["filename"]),
+        "setuptools",
+        "78.1.0",
+        ["py3-none-any"],
+        vendor=True,
+    )
+    nv_payload = _tagged_wheel(
+        tmp_path / str(nvjitlink["filename"]),
+        "nvidia-nvjitlink-cu12",
+        "12.9.86",
+        NV_TAGS,
+    )
+    assert wheelhouse._rejection("setuptools", "78.1.0") == "distribution has no exact pin"
+    assert wheelhouse._rejection("nvidia-nvjitlink-cu12", "12.9.86") is None
+    for record, payload in ((setuptools, setup_payload), (nvjitlink, nv_payload)):
+        accepted = wheelhouse._matching_record(payload, [_with_payload(record, payload)])
+        assert accepted is not None
+        assert accepted["filename"] == record["filename"]
+        assert accepted["version"] == record["version"]
+    inspected = wheelhouse.inspect_wheel_bytes(setup_payload, tmp_path / str(setuptools["filename"]))
+    assert inspected["zip_ok"] is True
+    assert inspected["declared_name"] == "setuptools"
+    assert inspected["declared_version"] == "78.1.0"
+    assert inspected["tags"] == ["py3-none-any"]
+
+
+def test_reproduction_rules_reject_other_versions_hashes_and_tags(tmp_path: Path) -> None:
+    setuptools = _reproduction("setuptools")
+    nvjitlink = _reproduction("nvidia-nvjitlink-cu12")
+    assert wheelhouse._rejection("nvidia-nvjitlink-cu12", "12.4.99") == (
+        "nvidia version is outside the cu121 closure"
+    )
+    assert wheelhouse._rejection("nvidia-cublas-cu12", "12.9.86") == (
+        "nvidia version is outside the cu121 closure"
+    )
+    assert wheelhouse._rejection("setuptools", "70.0.0") == "distribution has no exact pin"
+    other = _tagged_wheel(
+        tmp_path / "nvidia_nvjitlink_cu12-12.4.99-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl",
+        "nvidia-nvjitlink-cu12",
+        "12.4.99",
+        NV_TAGS,
+    )
+    other_record = {
+        **nvjitlink,
+        "filename": "nvidia_nvjitlink_cu12-12.4.99-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl",
+        "sha256": hashlib.sha256(other).hexdigest(),
+        "version": "12.4.99",
+    }
+    assert wheelhouse._matching_record(other, [other_record]) is None
+    setup_payload = _tagged_wheel(
+        tmp_path / str(setuptools["filename"]),
+        "setuptools",
+        "78.1.0",
+        ["py3-none-any"],
+        vendor=True,
+    )
+    assert wheelhouse._matching_record(setup_payload, [setuptools]) is None
+    with pytest.raises(ValueError, match="downloaded sha256 does not match"):
+        wheelhouse._download_official(setuptools, lambda _url: setup_payload)
+    macos = _tagged_wheel(
+        tmp_path / "setuptools-78.1.0-py3-none-macosx_14_0_arm64.whl",
+        "setuptools",
+        "78.1.0",
+        ["py3-none-macosx_14_0_arm64"],
+    )
+    macos_record = {
+        **setuptools,
+        "filename": "setuptools-78.1.0-py3-none-macosx_14_0_arm64.whl",
+        "sha256": hashlib.sha256(macos).hexdigest(),
+    }
+    assert wheelhouse._matching_record(macos, [macos_record]) is None
+    nv_macos = _tagged_wheel(
+        tmp_path / "nvidia_nvjitlink_cu12-12.9.86-py3-none-macosx_14_0_arm64.whl",
+        "nvidia-nvjitlink-cu12",
+        "12.9.86",
+        ["py3-none-macosx_14_0_arm64"],
+    )
+    nv_macos_record = {
+        **nvjitlink,
+        "filename": "nvidia_nvjitlink_cu12-12.9.86-py3-none-macosx_14_0_arm64.whl",
+        "sha256": hashlib.sha256(nv_macos).hexdigest(),
+    }
+    assert wheelhouse._matching_record(nv_macos, [nv_macos_record]) is None
+    ambiguous = _tagged_wheel(
+        tmp_path / "ambiguous.whl",
+        "setuptools",
+        "78.1.0",
+        ["py3-none-any"],
+        second_root=True,
+    )
+    assert wheelhouse.inspect_wheel_bytes(ambiguous, tmp_path / "ambiguous.whl")["rejection"] == (
+        "wheel metadata is ambiguous"
+    )
+    foreign = {**setuptools, "url": "https://example.invalid/setuptools-78.1.0-py3-none-any.whl"}
+    with pytest.raises(ValueError, match="unofficial host"):
+        wheelhouse._download_official(foreign, lambda _url: setup_payload)
+
+
+def test_close_resumes_without_replacing_forty_two_present_wheels(tmp_path: Path) -> None:
+    scratch = tmp_path / "scratch"
+    destination = scratch / "recovery" / "gollie-wheelhouse-exp49"
+    destination.mkdir(parents=True)
+    catalog: list[dict[str, object]] = []
+    present: list[tuple[Path, str, int]] = []
+    for index in range(42):
+        name = f"kept{index:02d}"
+        filename = f"{name}-1.0.0-py3-none-any.whl"
+        path = destination / filename
+        payload = _tagged_wheel(path, name, "1.0.0", ["py3-none-any"])
+        catalog.append(
+            {
+                "download": True,
+                "filename": filename,
+                "name": name,
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "url": f"https://files.pythonhosted.org/packages/aa/{filename}",
+                "version": "1.0.0",
+            }
+        )
+        present.append((path, hashlib.sha256(payload).hexdigest(), path.stat().st_mtime_ns))
+    setuptools = _reproduction("setuptools")
+    nvjitlink = _reproduction("nvidia-nvjitlink-cu12")
+    setup_payload = _tagged_wheel(
+        tmp_path / str(setuptools["filename"]),
+        "setuptools",
+        "78.1.0",
+        ["py3-none-any"],
+        vendor=True,
+    )
+    nv_payload = _tagged_wheel(
+        tmp_path / str(nvjitlink["filename"]),
+        "nvidia-nvjitlink-cu12",
+        "12.9.86",
+        NV_TAGS,
+    )
+    catalog.extend((_with_payload(setuptools, setup_payload), _with_payload(nvjitlink, nv_payload)))
+    calls: list[str] = []
+
+    def fetcher(url: str) -> bytes:
+        calls.append(url)
+        if url == nvjitlink["url"]:
+            return nv_payload
+        if url == setuptools["url"]:
+            return setup_payload
+        raise AssertionError(url)
+
+    report = wheelhouse.close_wheelhouse(
+        scratch / "missing-cache",
+        destination,
+        download_authorized=True,
+        scratch_root=scratch,
+        catalog=tuple(catalog),
+        fetcher=fetcher,
+    )
+    assert report["blocked"] == []
+    assert report["closure_complete"] is True
+    assert calls == [nvjitlink["url"], setuptools["url"]]
+    for path, digest, modified in present:
+        assert path.stat().st_mtime_ns == modified
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
+    calls.clear()
+    again = wheelhouse.close_wheelhouse(
+        scratch / "missing-cache",
+        destination,
+        download_authorized=True,
+        scratch_root=scratch,
+        catalog=tuple(catalog),
+        fetcher=fetcher,
+    )
+    assert calls == []
+    assert again["blocked"] == []
+    assert again["closure_complete"] is True
+    assert {item["status"] for item in again["results"]} == {"present"}
+    for path, digest, modified in present:
+        assert path.stat().st_mtime_ns == modified
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
