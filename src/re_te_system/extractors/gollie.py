@@ -23,6 +23,9 @@ GOLLIE_SCIENTIFIC_ROLE = "GUIDELINE_FOLLOWING_UIE_BASELINE"
 GOLLIE_DOCUMENTED_LANGUAGE = "en"
 GOLLIE_MERGED_FULL_MODEL = True
 REAL_GOLLIE_NATIVE_SMOKE = "BLOCKED_GPU"
+ACCREDITED_TRANSFORMERS = "4.57.6"
+CACHE_ADAPTER_ID = "gollie_legacy_kv_cache_v1"
+_LEGACY_CACHE_CLASSES: dict[type, type] = {}
 
 
 @dataclass(frozen=True)
@@ -139,6 +142,84 @@ def resolve_gollie_weights(config: GoLLIEConfig) -> tuple[str, dict[str, object]
     }
 
 
+def cache_compatibility_record() -> dict[str, object]:
+    """Operational record of the accredited cache adapter.
+
+    It is not part of the scientific identity. The runner stores it under
+    ``operational_metadata`` so the deterministic ``run_id`` stays unchanged.
+    """
+    return {
+        "adapter": CACHE_ADAPTER_ID,
+        "dynamic_cache": False,
+        "mechanism": "_supports_default_dynamic_cache",
+        "transformers": ACCREDITED_TRANSFORMERS,
+        "use_cache": True,
+    }
+
+
+def _legacy_cache_subclass(original: type) -> type:
+    if getattr(original, "_gollie_legacy_cache_adapter", False):
+        return original
+    cached = _LEGACY_CACHE_CLASSES.get(original)
+    if cached is not None:
+        return cached
+
+    class GoLLIELegacyCacheModel(original):
+        _gollie_legacy_cache_adapter = True
+
+        @classmethod
+        def _supports_default_dynamic_cache(cls) -> bool:
+            return False
+
+    cached = GoLLIELegacyCacheModel
+    _LEGACY_CACHE_CLASSES[original] = cached
+    return cached
+
+
+def declare_legacy_cache_only(model: Any) -> dict[str, object]:
+    """Opt this GoLLIE instance out of Transformers' automatic DynamicCache.
+
+    Transformers 4.57.6 injects an empty ``DynamicCache`` unless
+    ``_supports_default_dynamic_cache()`` is false. The pinned GoLLIE model
+    reads ``past_key_values[0][0].shape`` and keeps its own ``(kv, length)``
+    tuples. The override is a subclass of the loaded instance only. The
+    installed library, the original model class, and the modeling file stay
+    unchanged. ``use_cache`` stays enabled, and unknown caches are not
+    replaced.
+    """
+    import transformers
+
+    if transformers.__version__ != ACCREDITED_TRANSFORMERS:
+        raise RuntimeError(
+            "GoLLIE cache adapter requires transformers "
+            f"{ACCREDITED_TRANSFORMERS}; found {transformers.__version__}"
+        )
+    generation_config = getattr(model, "generation_config", None)
+    if generation_config is None:
+        raise RuntimeError("GoLLIE cache adapter requires a generation config")
+    cache_implementation = getattr(generation_config, "cache_implementation", None)
+    if cache_implementation is not None:
+        raise RuntimeError(
+            "GoLLIE cache adapter refuses cache_implementation "
+            f"{cache_implementation!r}"
+        )
+    if getattr(generation_config, "use_cache", True) is not True:
+        raise RuntimeError("GoLLIE cache adapter refuses use_cache other than True")
+    if getattr(model, "_is_stateful", False):
+        raise RuntimeError("GoLLIE cache adapter refuses a stateful model")
+    if not hasattr(model, "prepare_inputs_for_generation"):
+        raise RuntimeError("GoLLIE cache adapter requires prepare_inputs_for_generation")
+    original = type(model)
+    adapted = _legacy_cache_subclass(original)
+    if type(model) is not adapted:
+        model.__class__ = adapted
+    if model._supports_default_dynamic_cache():
+        raise RuntimeError("GoLLIE cache adapter did not disable DynamicCache")
+    if model._is_stateful:
+        raise RuntimeError("GoLLIE cache adapter must leave the model stateless")
+    return cache_compatibility_record()
+
+
 def _require_cuda_flash_attention() -> None:
     try:
         import torch
@@ -197,6 +278,7 @@ class GoLLIEExtractor:
         ).eval()
         self.device = torch.device("cuda")
         self.model.to(self.device)
+        self.cache_compatibility = declare_legacy_cache_only(self.model)
         self.model_revision = config.revision
         tokenizer_limit = int(getattr(self.tokenizer, "model_max_length", 16384))
         self.model_max_length = tokenizer_limit if tokenizer_limit < 1_000_000 else 16384

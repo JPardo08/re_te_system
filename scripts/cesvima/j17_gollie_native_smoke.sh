@@ -8,6 +8,20 @@ if [[ "${GOLLIE_J17_SMOKE_AUTHORIZED:-}" != "1" ]]; then
   exit 1
 fi
 PYTHON="${GOLLIE_VENV}/bin/python"
+if [[ -z "${SLURM_JOB_ID:-}" ]]; then
+  echo "FAIL: J17 requires SLURM_JOB_ID" >&2
+  exit 1
+fi
+OUTPUT_ROOT="$("${PYTHON}" - <<'PY'
+import os
+from pathlib import Path
+
+from j17_job_paths import j17_job_directory
+
+print(j17_job_directory(Path(os.environ["P3_RUNS_ROOT"]), os.environ["SLURM_JOB_ID"]))
+PY
+)"
+mkdir -p "${OUTPUT_ROOT}"
 DERIVED="$("${PYTHON}" - <<'PY'
 import os
 from pathlib import Path
@@ -20,8 +34,6 @@ assert_j17_prerequisites(runs)
 print(assert_j17_conversion(runs)["derived_path"])
 PY
 )"
-OUTPUT_ROOT="${P3_RUNS_ROOT}/gollie/native-smoke"
-mkdir -p "${OUTPUT_ROOT}"
 CLI_LOG="${OUTPUT_ROOT}/cli-stdout.txt"
 set +e
 "${PYTHON}" -m re_te_system.cli run \
