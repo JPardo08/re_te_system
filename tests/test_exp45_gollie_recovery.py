@@ -208,7 +208,7 @@ def test_j16_rejects_legacy_and_stays_unauthorized(
     def explode(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("weights were downloaded")
 
-    monkeypatch.setattr(j16, "cache_or_download", explode)
+    monkeypatch.setattr(j16, "recover_snapshot", explode)
     with pytest.raises(SystemExit):
         j16.main()
     assert "J16 weight download is not authorized" in capsys.readouterr().out
@@ -333,7 +333,7 @@ def test_j16_uses_the_isolated_venv_and_records_a_complete_download(
 
     monkeypatch.setattr(j16, "_local_complete_snapshot", local_hit)
     monkeypatch.setattr(j16, "probe_repository_access", explode)
-    monkeypatch.setattr(j16, "cache_or_download", explode)
+    monkeypatch.setattr(j16, "recover_snapshot", explode)
     monkeypatch.setenv("GOLLIE_J16_DOWNLOAD_AUTHORIZED", "1")
     assert j16.main() == 0
     assert calls == ["local"]
@@ -372,14 +372,11 @@ def test_j16_checks_access_before_a_missing_snapshot_and_rejects_bad_conditions(
         lambda repo, revision: order.append(f"access:{repo}@{revision}"),
     )
 
-    def fetch(repo: str, revision: str, pointer: Path) -> Path:
+    def fetch() -> Path:
         order.append("download")
-        assert repo == j16.GOLLIE_REPO
-        assert revision == j16.GOLLIE_REVISION
-        assert pointer == runs / "gollie" / "snapshot.json"
         return snapshot_dir
 
-    monkeypatch.setattr(j16, "cache_or_download", fetch)
+    monkeypatch.setattr(j16, "recover_snapshot", fetch)
     monkeypatch.setenv("GOLLIE_J16_DOWNLOAD_AUTHORIZED", "1")
     assert j16.main() == 0
     assert order == [f"access:{j16.GOLLIE_REPO}@{j16.GOLLIE_REVISION}", "download"]
@@ -392,7 +389,7 @@ def test_j16_checks_access_before_a_missing_snapshot_and_rejects_bad_conditions(
     def explode(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("weights were downloaded")
 
-    monkeypatch.setattr(j16, "cache_or_download", explode)
+    monkeypatch.setattr(j16, "recover_snapshot", explode)
     monkeypatch.setattr(j16, "probe_repository_access", explode)
     capsys.readouterr()
     with pytest.raises(SystemExit):
@@ -429,6 +426,267 @@ def test_j16_checks_access_before_a_missing_snapshot_and_rejects_bad_conditions(
     with pytest.raises(SystemExit):
         j16.assert_j17_prerequisites(space_runs)
     assert "gollie-isolated" in capsys.readouterr().out
+
+
+def _revision_snapshot(cache: Path) -> Path:
+    """The directory J15 leaves behind: the modeling file and nothing else."""
+    path = cache / "models--HiTZ--GoLLIE-7B" / "snapshots" / j16.GOLLIE_REVISION
+    path.mkdir(parents=True)
+    (path / j16.MODELING_FILE).write_bytes(b"x" * j16.MODELING_SIZE)
+    return path
+
+
+def _grant_download(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GOLLIE_J16_DOWNLOAD_AUTHORIZED", "1")
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+
+
+def _download_report(runs: Path) -> dict[str, object]:
+    return json.loads(
+        (runs / "gollie" / "download" / "jobs" / "1351100" / "download_report.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+
+def test_j16_completes_a_snapshot_that_only_has_the_modeling_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scratch, runs = _isolated_runtime(tmp_path, monkeypatch)
+    _accepted_j15(runs)
+    original = scratch / "venvs" / "gollie-l40s" / "untouched"
+    original.write_text("keep\n", encoding="utf-8")
+    partial = _revision_snapshot(scratch / "hf-cache" / "hub")
+    modes: list[bool] = []
+
+    def hub(repo: str, revision: str, *, local_files_only: bool) -> Path:
+        assert repo == j16.GOLLIE_REPO
+        assert revision == j16.GOLLIE_REVISION
+        modes.append(local_files_only)
+        if not local_files_only:
+            (partial / "config.json").write_text("{}\n", encoding="utf-8")
+            (partial / "model.safetensors").write_bytes(b"weights")
+        return partial
+
+    monkeypatch.setattr(j16, "snapshot", hub)
+    monkeypatch.setattr(
+        j16,
+        "probe_repository_access",
+        lambda repo, revision: modes.append(repo == j16.GOLLIE_REPO and revision == j16.GOLLIE_REVISION),
+    )
+    _grant_download(monkeypatch)
+    assert j16.main() == 0
+    assert modes == [True, True, False]
+    report = _download_report(runs)
+    assert report["status"] == "DOWNLOAD_PASS"
+    assert report["checkpoint_complete"] is True
+    assert report["weight_files"] == ["model.safetensors"]
+    pointer = runs / "gollie" / "download" / "accepted_job_id.txt"
+    assert pointer.read_text(encoding="utf-8") == "1351100\n"
+    recorded = json.loads((runs / "gollie" / "snapshot.json").read_text(encoding="utf-8"))
+    assert recorded["source"] == "downloaded"
+    assert original.read_text(encoding="utf-8") == "keep\n"
+    before = pointer.read_text(encoding="utf-8")
+    with pytest.raises(SystemExit):
+        j16.main()
+    assert pointer.read_text(encoding="utf-8") == before
+    assert j16.assert_j17_prerequisites(runs)["status"] == "DOWNLOAD_PASS"
+
+    indexed, indexed_runs = _isolated_runtime(tmp_path / "indexed", monkeypatch)
+    _accepted_j15(indexed_runs)
+    shard_dir = _revision_snapshot(indexed / "hf-cache" / "hub")
+    (shard_dir / "config.json").write_text("{}\n", encoding="utf-8")
+    (shard_dir / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": {"layer": "model-00001-of-00002.safetensors"}}),
+        encoding="utf-8",
+    )
+    shard_modes: list[bool] = []
+
+    def hub_index(repo: str, revision: str, *, local_files_only: bool) -> Path:
+        assert repo == j16.GOLLIE_REPO and revision == j16.GOLLIE_REVISION
+        shard_modes.append(local_files_only)
+        if not local_files_only:
+            (shard_dir / "model-00001-of-00002.safetensors").write_bytes(b"shard")
+        return shard_dir
+
+    monkeypatch.setattr(j16, "snapshot", hub_index)
+    monkeypatch.setattr(j16, "probe_repository_access", lambda _repo, _revision: None)
+    _grant_download(monkeypatch)
+    assert j16.main() == 0
+    assert shard_modes == [True, False]
+    assert _download_report(indexed_runs)["weight_files"] == ["model-00001-of-00002.safetensors"]
+
+    cached, cached_runs = _isolated_runtime(tmp_path / "cached", monkeypatch)
+    _accepted_j15(cached_runs)
+    repo = cached / "hf-cache" / "hub" / "models--HiTZ--GoLLIE-7B"
+    (repo / "blobs").mkdir(parents=True)
+    (repo / "blobs" / "config").write_text("{}\n", encoding="utf-8")
+    (repo / "blobs" / "weights").write_bytes(b"weights")
+    complete = repo / "snapshots" / j16.GOLLIE_REVISION
+    complete.mkdir(parents=True)
+    (complete / "config.json").symlink_to(Path("../../blobs/config"))
+    (complete / "model.safetensors").symlink_to(Path("../../blobs/weights"))
+    (complete / j16.MODELING_FILE).write_bytes(b"x" * j16.MODELING_SIZE)
+    cache_modes: list[bool] = []
+
+    def hub_cache(repo_id: str, revision: str, *, local_files_only: bool) -> Path:
+        assert repo_id == j16.GOLLIE_REPO and revision == j16.GOLLIE_REVISION
+        cache_modes.append(local_files_only)
+        if not local_files_only:
+            raise AssertionError("complete snapshot was downloaded")
+        return complete
+
+    monkeypatch.setattr(j16, "snapshot", hub_cache)
+    monkeypatch.setattr(
+        j16,
+        "probe_repository_access",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("metadata was probed")),
+    )
+    _grant_download(monkeypatch)
+    assert j16.main() == 0
+    assert cache_modes == [True]
+    cached_record = json.loads((cached_runs / "gollie" / "snapshot.json").read_text(encoding="utf-8"))
+    assert cached_record["source"] == "cache"
+    assert _download_report(cached_runs)["weight_files"] == ["model.safetensors"]
+
+
+def test_j16_keeps_a_partial_or_unsafe_snapshot_from_passing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    real_probe = j16.probe_repository_access
+    scratch, runs = _isolated_runtime(tmp_path, monkeypatch)
+    _accepted_j15(runs)
+    original = scratch / "venvs" / "gollie-l40s" / "untouched"
+    original.write_text("keep\n", encoding="utf-8")
+    partial = _revision_snapshot(scratch / "hf-cache" / "hub")
+    modes: list[bool] = []
+
+    def unchanged(repo: str, revision: str, *, local_files_only: bool) -> Path:
+        assert repo == j16.GOLLIE_REPO and revision == j16.GOLLIE_REVISION
+        modes.append(local_files_only)
+        return partial
+
+    monkeypatch.setattr(j16, "snapshot", unchanged)
+    monkeypatch.setattr(j16, "probe_repository_access", lambda _repo, _revision: None)
+    _grant_download(monkeypatch)
+    with pytest.raises(SystemExit):
+        j16.main()
+    assert "snapshot config.json is absent" in capsys.readouterr().out
+    assert modes == [True, False]
+    assert not (runs / "gollie" / "download" / "accepted_job_id.txt").exists()
+    with pytest.raises(SystemExit):
+        j16.assert_j17_prerequisites(runs)
+    assert "unidentified" in capsys.readouterr().out
+    assert original.read_text(encoding="utf-8") == "keep\n"
+
+    offline, offline_runs = _isolated_runtime(tmp_path / "offline", monkeypatch)
+    _accepted_j15(offline_runs)
+    offline_partial = _revision_snapshot(offline / "hf-cache" / "hub")
+    offline_modes: list[bool] = []
+
+    def offline_hub(repo: str, revision: str, *, local_files_only: bool) -> Path:
+        assert repo == j16.GOLLIE_REPO and revision == j16.GOLLIE_REVISION
+        offline_modes.append(local_files_only)
+        if not local_files_only:
+            raise AssertionError("offline snapshot was downloaded")
+        return offline_partial
+
+    monkeypatch.setattr(j16, "snapshot", offline_hub)
+    monkeypatch.setattr(j16, "probe_repository_access", real_probe)
+    monkeypatch.setenv("GOLLIE_J16_DOWNLOAD_AUTHORIZED", "1")
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    with pytest.raises(SystemExit):
+        j16.main()
+    assert "HF_HUB_OFFLINE" in capsys.readouterr().out
+    assert offline_modes == [True]
+    assert not (offline_runs / "gollie" / "download" / "accepted_job_id.txt").exists()
+
+    def refused(message: str, root: Path, build) -> None:
+        refused_scratch, refused_runs = _isolated_runtime(root, monkeypatch)
+        _accepted_j15(refused_runs)
+        returned = build(refused_scratch / "hf-cache" / "hub")
+        called: list[bool] = []
+
+        def hub(repo: str, revision: str, *, local_files_only: bool) -> Path:
+            assert repo == j16.GOLLIE_REPO and revision == j16.GOLLIE_REVISION
+            called.append(local_files_only)
+            if not local_files_only:
+                raise AssertionError("unsafe snapshot was recovered")
+            return returned
+
+        monkeypatch.setattr(j16, "snapshot", hub)
+        monkeypatch.setattr(
+            j16,
+            "probe_repository_access",
+            lambda *_args: (_ for _ in ()).throw(AssertionError("unsafe snapshot probed the hub")),
+        )
+        _grant_download(monkeypatch)
+        with pytest.raises(SystemExit):
+            j16.main()
+        assert message in capsys.readouterr().out
+        assert called == [True]
+        assert not (refused_runs / "gollie" / "download" / "accepted_job_id.txt").exists()
+        assert (refused_scratch / "venvs" / "gollie-l40s").is_dir()
+
+    def build_outside(_cache: Path) -> Path:
+        outside = tmp_path / "outside" / j16.GOLLIE_REVISION
+        outside.mkdir(parents=True)
+        return outside
+
+    def build_wrong(cache: Path) -> Path:
+        wrong = cache / "wrong-revision"
+        wrong.mkdir()
+        return wrong
+
+    def build_malformed(cache: Path) -> Path:
+        malformed = _revision_snapshot(cache)
+        (malformed / "config.json").write_text("{}\n", encoding="utf-8")
+        (malformed / "model.safetensors.index.json").write_text(
+            json.dumps({"weight_map": {"layer": "../model.safetensors"}}),
+            encoding="utf-8",
+        )
+        return malformed
+
+    def build_link(cache: Path) -> Path:
+        linked = _revision_snapshot(cache)
+        (linked / "config.json").symlink_to(tmp_path / "outside-config")
+        return linked
+
+    def build_short(cache: Path) -> Path:
+        corrupt = _revision_snapshot(cache)
+        (corrupt / "config.json").write_text("{}\n", encoding="utf-8")
+        (corrupt / "model.safetensors").write_bytes(b"weights")
+        (corrupt / j16.MODELING_FILE).write_bytes(b"short")
+        return corrupt
+
+    refused("outside the scratch", tmp_path / "outside-run", build_outside)
+    refused("snapshot revision", tmp_path / "revision-run", build_wrong)
+    refused("weight index is malformed", tmp_path / "index-run", build_malformed)
+    refused("improper symlink", tmp_path / "link-run", build_link)
+    refused("not the pinned file", tmp_path / "size-run", build_short)
+
+    exploded, exploded_runs = _isolated_runtime(tmp_path / "exploded", monkeypatch)
+    _accepted_j15(exploded_runs)
+    _revision_snapshot(exploded / "hf-cache" / "hub")
+
+    def explode(repo: str, revision: str, *, local_files_only: bool) -> Path:
+        assert repo == j16.GOLLIE_REPO and revision == j16.GOLLIE_REVISION
+        assert local_files_only is True
+        raise RuntimeError("hub exploded")
+
+    monkeypatch.setattr(j16, "snapshot", explode)
+    monkeypatch.setattr(
+        j16,
+        "probe_repository_access",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("an unexpected error became a download")),
+    )
+    _grant_download(monkeypatch)
+    with pytest.raises(RuntimeError, match="hub exploded"):
+        j16.main()
+    assert not (exploded_runs / "gollie" / "download" / "accepted_job_id.txt").exists()
 
 
 def test_j16_and_j17_sbatch_select_the_isolated_venv_without_a_global_grant() -> None:

@@ -261,7 +261,7 @@ def test_simulated_match_abi_and_kernel_pass_without_opening_j16(
     def explode(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("weights were downloaded")
 
-    monkeypatch.setattr(j16, "cache_or_download", explode)
+    monkeypatch.setattr(j16, "recover_snapshot", explode)
     with pytest.raises(SystemExit):
         j16.main()
     assert "J16 weight download is not authorized" in capsys.readouterr().out

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from cesvima_common import fail, read_json, require_under_scratch, write_json
 from gollie_environment import _require_job_id, accepted_pointer, j16_rejection_reason, job_report_dir
-from hf_snapshot import cache_or_download, snapshot
+from hf_snapshot import snapshot
 
 
 GOLLIE_REPO = "HiTZ/GoLLIE-7B"
@@ -130,26 +130,107 @@ def probe_repository_access(repo_id: str, revision: str) -> None:
         fail(f"repository metadata revision {observed} is not {revision}")
 
 
-def _weight_files(snapshot_dir: Path) -> list[Path]:
+def _repo_cache(cache: Path) -> Path:
+    return (cache / ("models--" + GOLLIE_REPO.replace("/", "--"))).resolve()
+
+
+def _local_entry_not_found() -> type[BaseException]:
+    try:
+        from huggingface_hub.errors import LocalEntryNotFoundError
+    except ImportError as exc:
+        fail(f"huggingface_hub is not importable: {exc}")
+    return LocalEntryNotFoundError
+
+
+def _accepted_blob_target(path: Path, cache: Path, scratch: Path) -> Path:
+    """Hugging Face stores snapshot names as symlinks to blobs in the same repo cache."""
+    try:
+        target = path.resolve()
+    except OSError:
+        fail(f"{path.name} is an improper symlink")
+    repo = _repo_cache(cache)
+    if (
+        not target.is_file()
+        or not _inside(repo, target)
+        or not _inside(cache, target)
+        or not _inside(scratch, target)
+    ):
+        fail(f"{path.name} is an improper symlink")
+    return target
+
+
+def _content_gap(
+    path: Path,
+    *,
+    snapshot: Path,
+    cache: Path,
+    scratch: Path,
+    absent: str,
+) -> str | None:
+    """Return absent when a safe entry is missing or empty. fail() on an unsafe entry."""
+    if path.is_symlink():
+        target = _accepted_blob_target(path, cache, scratch)
+        if target.stat().st_size == 0:
+            return absent
+        return None
+    if not path.is_file() or path.stat().st_size == 0:
+        return absent
+    resolved = path.resolve()
+    if not _inside(snapshot, resolved) or not _inside(scratch, resolved):
+        fail(f"{path.name} escapes the snapshot")
+    return None
+
+
+def _weight_entries(snapshot_dir: Path, cache: Path, scratch: Path) -> tuple[list[Path] | None, str | None]:
     index = snapshot_dir / "model.safetensors.index.json"
-    if index.is_symlink():
-        fail("weight index is a symlink")
-    if index.is_file():
-        payload = json.loads(index.read_text(encoding="utf-8"))
-        mapping = payload.get("weight_map")
-        if not isinstance(mapping, dict) or not mapping:
+    if index.is_symlink() or index.is_file():
+        if index.is_symlink():
+            _accepted_blob_target(index, cache, scratch)
+        elif not _inside(snapshot_dir, index.resolve()) or not _inside(scratch, index.resolve()):
+            fail("weight index escapes the snapshot")
+        try:
+            payload = json.loads(index.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            fail("weight index is malformed")
+        if not isinstance(payload, dict) or not isinstance(payload.get("weight_map"), dict):
+            fail("weight index is malformed")
+        mapping = payload["weight_map"]
+        if not mapping:
             fail("weight index is empty")
-        return [snapshot_dir / name for name in sorted(set(mapping.values()))]
-    return [
-        path
-        for path in snapshot_dir.iterdir()
-        if path.is_file()
-        and not path.is_symlink()
-        and (path.name.endswith(".safetensors") or path.name.startswith("pytorch_model"))
-    ]
+        names: list[str] = []
+        for name in mapping.values():
+            if not isinstance(name, str) or name != Path(name).name or name in {".", ".."}:
+                fail("weight index is malformed")
+            names.append(name)
+        paths = [snapshot_dir / name for name in sorted(set(names))]
+    else:
+        paths = [
+            path
+            for path in snapshot_dir.iterdir()
+            if path.is_file()
+            and (path.name.endswith(".safetensors") or path.name.startswith("pytorch_model"))
+        ]
+        if not paths:
+            return None, "snapshot has no weight files"
+    for path in paths:
+        gap = _content_gap(
+            path,
+            snapshot=snapshot_dir,
+            cache=cache,
+            scratch=scratch,
+            absent=f"weight file is absent or empty: {path.name}",
+        )
+        if gap is not None:
+            return None, gap
+    return paths, None
 
 
-def assert_snapshot_complete(snapshot_dir: Path) -> dict[str, object]:
+def inspect_snapshot(snapshot_dir: Path) -> tuple[dict[str, object] | None, str | None]:
+    """Return the weight record, or a recoverable absence reason.
+
+    Paths outside SCRATCH, improper symlinks, a wrong tree, and a malformed
+    index call fail() and must not be treated as a cache miss.
+    """
     if snapshot_dir.is_symlink() or not snapshot_dir.is_dir():
         fail("snapshot is not a real directory")
     cache = assert_cache_writable()
@@ -157,37 +238,83 @@ def assert_snapshot_complete(snapshot_dir: Path) -> dict[str, object]:
     resolved = snapshot_dir.resolve()
     if not _inside(cache, resolved) or not _inside(scratch, resolved):
         fail("snapshot is outside the scratch Hugging Face cache")
-    config = snapshot_dir / "config.json"
+    config_gap = _content_gap(
+        snapshot_dir / "config.json",
+        snapshot=resolved,
+        cache=cache,
+        scratch=scratch,
+        absent="snapshot config.json is absent",
+    )
+    if config_gap is not None:
+        return None, config_gap
     modeling = snapshot_dir / MODELING_FILE
-    if config.is_symlink() or not config.is_file() or config.stat().st_size == 0:
-        fail("snapshot config.json is absent")
-    if (
-        modeling.is_symlink()
-        or not modeling.is_file()
-        or modeling.stat().st_size != MODELING_SIZE
-    ):
+    modeling_gap = _content_gap(
+        modeling,
+        snapshot=resolved,
+        cache=cache,
+        scratch=scratch,
+        absent="snapshot modeling module is absent",
+    )
+    if modeling_gap is not None:
+        return None, modeling_gap
+    if modeling.stat().st_size != MODELING_SIZE:
         fail("snapshot modeling module is not the pinned file")
-    weights = _weight_files(snapshot_dir)
-    if not weights:
-        fail("snapshot has no weight files")
+    weights, weight_gap = _weight_entries(resolved, cache, scratch)
+    if weight_gap is not None or weights is None:
+        return None, weight_gap or "snapshot has no weight files"
     names = []
     total = 0
     for path in weights:
-        if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
-            fail(f"weight file is absent or empty: {path.name}")
-        if not _inside(resolved, path.resolve()):
-            fail(f"weight file escapes the snapshot: {path.name}")
         names.append(path.name)
         total += path.stat().st_size
-    return {"bytes": total, "weight_files": names}
+    return {"bytes": total, "weight_files": names}, None
+
+
+def assert_snapshot_complete(snapshot_dir: Path) -> dict[str, object]:
+    record, reason = inspect_snapshot(snapshot_dir)
+    if reason is not None or record is None:
+        fail(reason or "snapshot is incomplete")
+    return record
+
+
+def _require_revision_directory(path: Path) -> None:
+    if path.name != GOLLIE_REVISION:
+        fail(f"snapshot revision {path.name} is not {GOLLIE_REVISION}")
 
 
 def _local_complete_snapshot() -> Path | None:
+    """Return a complete local snapshot.
+
+    A missing directory and a safe but incomplete directory both return None so
+    the caller can recover them. Any other error, including an unsafe tree, is
+    not converted into a cache miss.
+    """
+    missing = _local_entry_not_found()
     try:
         path = snapshot(GOLLIE_REPO, GOLLIE_REVISION, local_files_only=True)
-    except Exception:
+    except missing:
         return None
-    assert_snapshot_complete(path)
+    _require_revision_directory(path)
+    _record, reason = inspect_snapshot(path)
+    if reason is not None:
+        return None
+    return path
+
+
+def recover_snapshot() -> Path:
+    """Download the pinned revision.
+
+    cache_or_download() returns an existing snapshot directory without checking
+    its files, which is how the partial J15 cache skipped the download. This
+    call asks the hub for the revision with local_files_only disabled. The
+    caller still has to validate the result before writing DOWNLOAD_PASS.
+    """
+    missing = _local_entry_not_found()
+    try:
+        path = snapshot(GOLLIE_REPO, GOLLIE_REVISION, local_files_only=False)
+    except missing as exc:
+        fail(f"could not complete the GoLLIE snapshot: {exc}")
+    _require_revision_directory(path)
     return path
 
 
@@ -240,24 +367,21 @@ def main() -> int:
     job_id = os.environ.get("SLURM_JOB_ID", "")
     _require_job_id(job_id)
     local = _local_complete_snapshot()
+    source = "cache"
     if local is None:
         probe_repository_access(GOLLIE_REPO, GOLLIE_REVISION)
-        local = cache_or_download(
-            GOLLIE_REPO,
-            GOLLIE_REVISION,
-            runs / "gollie" / "snapshot.json",
-        )
-    else:
-        write_json(
-            runs / "gollie" / "snapshot.json",
-            {
-                "local_path": str(local.resolve()),
-                "repository": GOLLIE_REPO,
-                "revision": GOLLIE_REVISION,
-                "source": "cache",
-            },
-        )
+        local = recover_snapshot()
+        source = "downloaded"
     checked = assert_snapshot_complete(local)
+    write_json(
+        runs / "gollie" / "snapshot.json",
+        {
+            "local_path": str(local.resolve()),
+            "repository": GOLLIE_REPO,
+            "revision": GOLLIE_REVISION,
+            "source": source,
+        },
+    )
     _write_download_record(
         runs,
         job_id,
