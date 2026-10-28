@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -214,3 +216,194 @@ def test_identity_probe_does_not_run_dynamic_tools(
     assert assessment["installed_extension_path"] == str(extension)
     assert assessment["binary_identity"] == "NOT_COMPARED"
     assert assessment["abi_pass"] is False
+
+
+def _isolated_extension(venv: Path) -> Path:
+    extension = _site(venv) / EXTENSION
+    _write(extension, b"isolated-extension")
+    for relative in (
+        Path("torch/lib"),
+        Path("nvidia/cublas/lib"),
+        Path("nvidia/cuda_runtime/lib"),
+    ):
+        (_site(venv) / relative).mkdir(parents=True)
+    return extension
+
+
+def _abi_decision(dynamic: bool | None) -> dict[str, object]:
+    return gollie_env.evaluate_abi(
+        binary_identity="MATCH",
+        installed_extension_sha256="ab" * 32,
+        dynamic_dependencies_resolved=dynamic,
+        glibc_requirement_satisfied=True,
+        import_succeeded=True,
+        observed_on_gpu_node=True,
+    )
+
+
+def test_ldd_uses_the_isolated_venv_libraries_without_changing_the_process_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    venv = tmp_path / "gollie-isolated"
+    extension = _isolated_extension(venv)
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/opt/hpc/lib")
+    before = dict(os.environ)
+    calls: list[tuple[list[str], dict[str, str] | None]] = []
+
+    def fake_run(
+        argv: list[str],
+        *,
+        capture_output: bool,
+        text: bool,
+        check: bool,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append((list(argv), env))
+        if argv[0] == "ldd":
+            return subprocess.CompletedProcess(argv, 0, stdout=LDD_RESOLVED, stderr="")
+        if argv[0] == "readelf":
+            return subprocess.CompletedProcess(argv, 0, stdout=SYMBOLS_214, stderr="")
+        if argv[0] == "getconf":
+            return subprocess.CompletedProcess(argv, 0, stdout="glibc 2.35\n", stderr="")
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="")
+
+    monkeypatch.setattr(gollie_env.subprocess, "run", fake_run)
+    observed = gollie_env.collect_runtime_abi(extension, device_family="L40S")
+    assert observed["dynamic_dependencies_resolved"] is True
+    assert _abi_decision(True)["abi_pass"] is True
+    assert os.environ == before
+    ldd_calls = [item for item in calls if item[0][0] == "ldd"]
+    assert len(ldd_calls) == 1
+    ldd_env = ldd_calls[0][1]
+    assert ldd_env is not None
+    assert ldd_env is not os.environ
+    site = _site(venv)
+    expected = ":".join(
+        [
+            str((site / "torch/lib").resolve()),
+            str((site / "nvidia/cublas/lib").resolve()),
+            str((site / "nvidia/cuda_runtime/lib").resolve()),
+            "/opt/hpc/lib",
+        ]
+    )
+    assert ldd_env["LD_LIBRARY_PATH"] == expected
+    assert os.environ["LD_LIBRARY_PATH"] == "/opt/hpc/lib"
+
+
+def test_missing_torch_lib_and_unresolved_ldd_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    venv = tmp_path / "gollie-isolated"
+    extension = _site(venv) / EXTENSION
+    _write(extension, b"isolated-extension")
+    calls: list[str] = []
+
+    def fake_run(
+        argv: list[str],
+        *,
+        capture_output: bool,
+        text: bool,
+        check: bool,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(argv[0])
+        if argv[0] == "ldd":
+            raise AssertionError("ldd ran without the isolated torch libraries")
+        return subprocess.CompletedProcess(argv, 0, stdout=SYMBOLS_214, stderr="")
+
+    monkeypatch.setattr(gollie_env.subprocess, "run", fake_run)
+    missing = gollie_env.collect_runtime_abi(extension, device_family="L40S")
+    assert missing["dynamic_dependencies_resolved"] is False
+    assert _abi_decision(False)["abi_pass"] is False
+    assert "ldd" not in calls
+
+    _isolated_extension(venv)
+
+    def unresolved(
+        argv: list[str],
+        *,
+        capture_output: bool,
+        text: bool,
+        check: bool,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        if argv[0] == "ldd":
+            return subprocess.CompletedProcess(argv, 1, stdout=LDD_MISSING, stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout=SYMBOLS_214, stderr="")
+
+    monkeypatch.setattr(gollie_env.subprocess, "run", unresolved)
+    unresolved_observation = gollie_env.collect_runtime_abi(extension, device_family="L40S")
+    assert unresolved_observation["dynamic_dependencies_resolved"] is False
+    assert _abi_decision(False)["abi_pass"] is False
+
+
+def test_ldd_rejects_a_library_directory_outside_the_venv(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    venv = tmp_path / "gollie-isolated"
+    extension = _isolated_extension(venv)
+    outside = tmp_path / "outside-lib"
+    outside.mkdir()
+    torch_lib = _site(venv) / "torch" / "lib"
+    torch_lib.rmdir()
+    torch_lib.symlink_to(outside)
+
+    def fake_run(
+        argv: list[str],
+        *,
+        capture_output: bool,
+        text: bool,
+        check: bool,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        if argv[0] == "ldd":
+            raise AssertionError("ldd ran with a library path outside the venv")
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(gollie_env.subprocess, "run", fake_run)
+    observed = gollie_env.collect_runtime_abi(extension, device_family="L40S")
+    assert gollie_env.ldd_library_directories(extension) is None
+    assert observed["dynamic_dependencies_resolved"] is False
+    assert _abi_decision(False)["abi_pass"] is False
+    assert str(outside) not in os.environ.get("LD_LIBRARY_PATH", "")
+
+
+def test_indeterminate_ldd_does_not_pass(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    venv = tmp_path / "gollie-isolated"
+    extension = _isolated_extension(venv)
+    outputs = iter(
+        (
+            subprocess.CompletedProcess(["ldd"], 0, stdout="", stderr=""),
+            subprocess.CompletedProcess(["ldd"], 2, stdout=LDD_RESOLVED, stderr=""),
+        )
+    )
+
+    def fake_run(
+        argv: list[str],
+        *,
+        capture_output: bool,
+        text: bool,
+        check: bool,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        if argv[0] == "ldd":
+            return next(outputs)
+        if argv[0] == "readelf":
+            return subprocess.CompletedProcess(argv, 0, stdout=SYMBOLS_214, stderr="")
+        if argv[0] == "getconf":
+            return subprocess.CompletedProcess(argv, 0, stdout="glibc 2.35\n", stderr="")
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="")
+
+    monkeypatch.setattr(gollie_env.subprocess, "run", fake_run)
+    empty = gollie_env.collect_runtime_abi(extension, device_family="L40S")
+    assert empty["dynamic_dependencies_resolved"] is None
+    assert _abi_decision(None)["abi_pass"] is False
+    failed_tool = gollie_env.collect_runtime_abi(extension, device_family="L40S")
+    assert failed_tool["dynamic_dependencies_resolved"] is None
+    assert _abi_decision(None)["abi_pass"] is False

@@ -495,8 +495,20 @@ def _find_extension(venv: Path) -> Path | None:
 _GLIBC_NEEDED = re.compile(r"GLIBC_(\d+)\.(\d+)")
 
 
-def dynamic_dependencies_resolved(ldd_text: str | None) -> bool | None:
-    """True when ldd resolves every library. Static wheel metadata is ignored."""
+def dynamic_dependencies_resolved(
+    ldd_text: str | None,
+    *,
+    returncode: int | None = 0,
+) -> bool | None:
+    """True when ldd resolves every library. Static wheel metadata is ignored.
+
+    A nonzero exit is not a success. Text that still names a missing library
+    is a failure. Empty or otherwise unusable output stays undecided.
+    """
+    if returncode not in {0, None}:
+        if ldd_text and "not found" in ldd_text:
+            return False
+        return None
     if ldd_text is None or not ldd_text.strip():
         return None
     if "not found" in ldd_text:
@@ -528,16 +540,119 @@ def glibc_requirement_satisfied(symbol_text: str | None, runtime_glibc: str | No
     return max(needed) <= runtime
 
 
-def _command_text(argv: list[str]) -> str | None:
-    try:
-        completed = subprocess.run(argv, capture_output=True, text=True, check=False)
-    except OSError:
+def _venv_of_accredited_extension(extension: Path) -> Path | None:
+    """The venv that owns the exact site-packages extension. Symlinks do not qualify."""
+    if extension.is_symlink() or not extension.is_file() or extension.name != FLASH_ATTN_EXTENSION:
         return None
+    try:
+        site = extension.parents[0]
+        python_dir = extension.parents[1]
+        lib_dir = extension.parents[2]
+        venv = extension.parents[3]
+    except IndexError:
+        return None
+    if (site.name, python_dir.name, lib_dir.name) != ("site-packages", "python3.12", "lib"):
+        return None
+    cursor = venv
+    for part in ("lib", "python3.12", "site-packages", FLASH_ATTN_EXTENSION):
+        cursor = cursor / part
+        if cursor.is_symlink():
+            return None
+    if cursor != extension:
+        return None
+    return venv
+
+
+def _real_directory_inside(venv: Path, relative: Path) -> Path | None:
+    """A real directory under venv. A symlink, missing path, or escape is rejected."""
+    if not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
+        return None
+    cursor = venv
+    for part in relative.parts:
+        cursor = cursor / part
+        if cursor.is_symlink() or not cursor.exists():
+            return None
+    if not cursor.is_dir():
+        return None
+    resolved = cursor.resolve()
+    try:
+        resolved.relative_to(venv.resolve())
+    except ValueError:
+        return None
+    return resolved
+
+
+def ldd_library_directories(extension: Path) -> list[Path] | None:
+    """torch/lib plus existing nvidia/*/lib, only inside the extension's venv.
+
+    Callers do not supply directories. An unexpected symlink or a path that
+    leaves the venv rejects the whole set.
+    """
+    venv = _venv_of_accredited_extension(extension)
+    if venv is None:
+        return None
+    torch_lib = _real_directory_inside(venv, Path("lib/python3.12/site-packages/torch/lib"))
+    if torch_lib is None:
+        return None
+    nvidia = venv / "lib" / "python3.12" / "site-packages" / "nvidia"
+    nvidia_libs: list[Path] = []
+    if nvidia.exists() or nvidia.is_symlink():
+        if nvidia.is_symlink() or not nvidia.is_dir():
+            return None
+        for child in sorted(nvidia.iterdir(), key=lambda item: item.name):
+            lib = child / "lib"
+            if not lib.exists() and not lib.is_symlink():
+                continue
+            resolved = _real_directory_inside(
+                venv,
+                Path("lib/python3.12/site-packages/nvidia") / child.name / "lib",
+            )
+            if resolved is None:
+                return None
+            nvidia_libs.append(resolved)
+    return [torch_lib, *nvidia_libs]
+
+
+def ldd_subprocess_env(extension: Path) -> dict[str, str] | None:
+    """Environment for one ldd call. Does not write os.environ.
+
+    Venv libraries come first. The inherited LD_LIBRARY_PATH stays after them
+    so system and HPC libraries remain visible without replacing the venv copies.
+    """
+    directories = ldd_library_directories(extension)
+    if not directories:
+        return None
+    env = dict(os.environ)
+    prefix = [str(path) for path in directories]
+    inherited = [part for part in env.get("LD_LIBRARY_PATH", "").split(":") if part and part not in prefix]
+    env["LD_LIBRARY_PATH"] = ":".join([*prefix, *inherited])
+    return env
+
+
+def _command_output(
+    argv: list[str],
+    env: dict[str, str] | None = None,
+) -> tuple[str | None, int | None]:
+    try:
+        completed = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+    except OSError:
+        return None, None
     text = completed.stdout or ""
     if not text.strip():
         text = completed.stderr or ""
     if not text.strip():
-        return None
+        return None, completed.returncode
+    return text, completed.returncode
+
+
+def _command_text(argv: list[str], env: dict[str, str] | None = None) -> str | None:
+    text, _returncode = _command_output(argv, env=env)
     return text
 
 
@@ -564,7 +679,12 @@ def collect_runtime_abi(extension: Path, *, device_family: str | None) -> dict[s
     }
     if device_family != "L40S" or not extension.is_file():
         return unobserved
-    ldd_text = _command_text(["ldd", str(extension)])
+    library_env = ldd_subprocess_env(extension)
+    if library_env is None:
+        dependencies: bool | None = False
+    else:
+        ldd_text, ldd_code = _command_output(["ldd", str(extension)], env=library_env)
+        dependencies = dynamic_dependencies_resolved(ldd_text, returncode=ldd_code)
     symbol_text = _command_text(["readelf", "-V", str(extension)])
     if symbol_text is None:
         symbol_text = _command_text(["objdump", "-T", str(extension)])
@@ -574,7 +694,7 @@ def collect_runtime_abi(extension: Path, *, device_family: str | None) -> dict[s
     except Exception:
         imported = False
     return {
-        "dynamic_dependencies_resolved": dynamic_dependencies_resolved(ldd_text),
+        "dynamic_dependencies_resolved": dependencies,
         "glibc_requirement_satisfied": glibc_requirement_satisfied(symbol_text, runtime_glibc),
         "import_succeeded": imported,
         "observed_on_gpu_node": True,
