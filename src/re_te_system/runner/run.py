@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import json
+import os
 from pathlib import Path
 import re
+import sys
+import traceback
 from typing import Any, Callable, Iterable, Mapping
 
 from re_te_system.contracts import (
@@ -65,6 +68,26 @@ class WindowingConfig:
 
 def _natural_key(value: str) -> tuple[Any, ...]:
     return tuple(int(part) if part.isdigit() else part for part in re.split(r"(\d+)", value))
+
+
+def _capture_extraction_traceback(run_dir: Path) -> None:
+    """Keep the failure record unchanged unless the diagnostic grant is exact.
+
+    The grant is the environment variable ``GOLLIE_J17_TRACE_AUTHORIZED``
+    equal to ``1``. Any other value leaves the run directory as before.
+    """
+    if os.environ.get("GOLLIE_J17_TRACE_AUTHORIZED") != "1":
+        return
+    formatted = traceback.format_exc()
+    sys.stderr.write(formatted)
+    if not formatted.endswith("\n"):
+        sys.stderr.write("\n")
+    sys.stderr.flush()
+    path = run_dir / "extraction_traceback.txt"
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(formatted)
+        if not formatted.endswith("\n"):
+            handle.write("\n")
 
 
 def load_hohfeld_documents(path: str | Path) -> list[InputRecord]:
@@ -314,6 +337,7 @@ def run_pipeline(
                     )
             except Exception as exc:
                 example_failed = True
+                _capture_extraction_traceback(run_dir)
                 parse_issues.append(
                     ParseIssue(
                         "MODEL_FAILURE",

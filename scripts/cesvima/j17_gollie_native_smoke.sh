@@ -22,7 +22,9 @@ PY
 )"
 OUTPUT_ROOT="${P3_RUNS_ROOT}/gollie/native-smoke"
 mkdir -p "${OUTPUT_ROOT}"
-RUN_JSON="$("${PYTHON}" -m re_te_system.cli run \
+CLI_LOG="${OUTPUT_ROOT}/cli-stdout.txt"
+set +e
+"${PYTHON}" -m re_te_system.cli run \
   --extractor gollie \
   --documents "${SYSTEM_ROOT}/tests/fixtures/gollie/official_re_documents.jsonl" \
   --gollie-schema-file "${SYSTEM_ROOT}/tests/fixtures/gollie/official_re_schema.json" \
@@ -37,8 +39,14 @@ RUN_JSON="$("${PYTHON}" -m re_te_system.cli run \
   --gollie-max-new-tokens 128 \
   --seed 42 \
   --window-strategy TOKEN \
-  --window-overlap 0)"
-echo "${RUN_JSON}"
-RUN_DIR="$(printf '%s' "${RUN_JSON}" | "${PYTHON}" -c 'import json,sys; print(json.load(sys.stdin)["run_dir"])')"
+  --window-overlap 0 > "${CLI_LOG}"
+cli_status=$?
+set -e
+cat "${CLI_LOG}"
+if [[ "${cli_status}" -ne 0 ]]; then
+  echo "FAIL: GoLLIE CLI exited ${cli_status}" >&2
+  exit "${cli_status}"
+fi
+RUN_DIR="$("${PYTHON}" "${SYSTEM_ROOT}/scripts/cesvima/terminal_run_json.py" "${CLI_LOG}")"
 "${PYTHON}" "${SYSTEM_ROOT}/scripts/cesvima/pass_baseline_run.py" \
   "${RUN_DIR}" 1 d3e41fef45f6a7d438c46ba7d9fce5d0d486c7a9

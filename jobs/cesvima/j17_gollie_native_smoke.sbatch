@@ -17,6 +17,7 @@ if [[ "${saved_smoke}" != "1" ]]; then
 fi
 source /home/y064/PROJECT/y064644/paper3/re_te_system/scripts/cesvima/env.sh
 export GOLLIE_J17_SMOKE_AUTHORIZED="${saved_smoke}"
+unset GOLLIE_J17_TRACE_AUTHORIZED
 original="${GOLLIE_VENV:-}"
 if [[ -z "${original}" ]]; then
   echo "FAIL: env.sh did not set GOLLIE_VENV" >&2
