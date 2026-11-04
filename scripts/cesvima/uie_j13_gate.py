@@ -2,7 +2,8 @@
 
 The module constant UIE_J13_TRAINING_AUTHORIZED stays false and is not a grant.
 UIE_J13_RUN_AUTHORIZED is read from the environment of one process. It does not
-authorize J12, the conversion job, or the GPU probe. A missing GPU-probe
+authorize J12, the conversion job, the GPU probe, or the integration probe.
+UIE_J13_INTEGRATION_PROBE_AUTHORIZED does not authorize J13. A missing GPU-probe
 report keeps training closed.
 """
 
@@ -19,6 +20,13 @@ from uie_train_config import training_argv
 RUN_ENV = "UIE_J13_RUN_AUTHORIZED"
 PROBE_ENV = "UIE_J13_GPU_PROBE_AUTHORIZED"
 LAUNCH_ENV = "UIE_J13_LAUNCHED_BY_GATE"
+INTEGRATION_ENV = "UIE_J13_INTEGRATION_PROBE_AUTHORIZED"
+INTEGRATION_CHILD_ENV = "UIE_J13_INTEGRATION_CHILD"
+
+ACCEPTED_PROBE_JOB_ID = "1363874"
+ACCEPTED_PROBE_BATCH16_PEAK_VRAM_BYTES = 14275008512
+ACCEPTED_PROBE_GENERATION64_PEAK_VRAM_BYTES = 3223645696
+ACCEPTED_PROBE_CHECKPOINT_BYTES = 990185320
 
 ACCEPTED_J12_JOB_ID = "1363190"
 ACCEPTED_CONVERSION_JOB_ID = "1363171"
@@ -80,6 +88,10 @@ def run_authorized() -> bool:
 
 def probe_authorized() -> bool:
     return os.environ.get(PROBE_ENV) == "1"
+
+
+def integration_authorized() -> bool:
+    return os.environ.get(INTEGRATION_ENV) == "1"
 
 
 def launched_by_gate() -> bool:

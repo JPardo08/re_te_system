@@ -174,6 +174,9 @@ def main() -> int:
     report, saved = require_identified_preflight()
     if UIE_J13_TRAINING_AUTHORIZED is not False or not run_authorized():
         fail("J13 training is not authorized")
+    integration_lock = Path(os.environ["P3_RUNS_ROOT"]) / "uie" / "j13-integration" / "publish.lock"
+    if integration_lock.exists():
+        fail("J13 refuses to train while an integration probe lock is held")
     _require_accredited(report)
     runs = Path(os.environ["P3_RUNS_ROOT"])
     uie_root = Path(os.environ["P3_UPSTREAM_ROOT"]) / "UIE"
