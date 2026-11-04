@@ -8,10 +8,19 @@ import subprocess
 import sys
 from pathlib import Path
 
-from cesvima_common import fail, read_json, sha256_file, write_json
+from cesvima_common import fail, read_json, require_under_scratch, sha256_file, write_json
 from uie_fingerprint import build_fingerprint, fingerprint_digest
+from uie_j13_gate import (
+    LAUNCH_ENV,
+    accredited_report_problems,
+    assert_frozen_experiment,
+    probe_report_problems,
+    run_authorized,
+    verify_derived_file,
+)
 from uie_origin_pin import FROZEN_10SHOT_SHA256, UIE_J13_TRAINING_AUTHORIZED
 from uie_train_config import require_10shot, training_argv
+from uie_trainer_compat import adapt_training_argv, require_trainer_runtime
 
 
 def _incomplete(report: dict) -> list[str]:
@@ -117,38 +126,107 @@ def _collect(output_dir: Path) -> None:
     )
 
 
+def _require_accredited(report: dict) -> None:
+    problems = accredited_report_problems(report)
+    if problems:
+        fail("J13 refuses evidence that is not the accepted J12 run: " + "; ".join(problems))
+
+
+def _require_probe(runs: Path) -> dict:
+    pointer = runs / "uie" / "j13-probe" / "accepted_job_id.txt"
+    if not pointer.is_file():
+        fail("J13 GPU probe has not passed; refusing to train")
+    job_id = pointer.read_text(encoding="utf-8").strip()
+    if not job_id or job_id in {".", ".."} or "/" in job_id or "\\" in job_id:
+        fail("J13 GPU probe has not passed; refusing to train")
+    report_path = runs / "uie" / "j13-probe" / "jobs" / job_id / "probe_report.json"
+    if not report_path.is_file():
+        fail("J13 GPU probe has not passed; refusing to train")
+    report = read_json(report_path)
+    if report.get("slurm_job_id") != job_id:
+        fail("J13 GPU probe report belongs to another JOBID; refusing to train")
+    problems = probe_report_problems(report)
+    if problems:
+        fail("J13 GPU probe has not passed; refusing to train: " + "; ".join(problems))
+    return report
+
+
+def _acquire_lock(lock_path: Path, job_id: str) -> None:
+    require_under_scratch(lock_path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        fail("J13 refuses a concurrent training run; publish.lock is already held")
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(job_id + "\n")
+
+
+def _release_lock(lock_path: Path, job_id: str) -> None:
+    if not lock_path.is_file():
+        return
+    if lock_path.read_text(encoding="utf-8").strip() != job_id:
+        return
+    lock_path.unlink()
+
+
 def main() -> int:
     report, saved = require_identified_preflight()
-    if UIE_J13_TRAINING_AUTHORIZED is not True:
+    if UIE_J13_TRAINING_AUTHORIZED is not False or not run_authorized():
         fail("J13 training is not authorized")
+    _require_accredited(report)
+    runs = Path(os.environ["P3_RUNS_ROOT"])
     uie_root = Path(os.environ["P3_UPSTREAM_ROOT"]) / "UIE"
-    shot_pointer = Path(os.environ["P3_RUNS_ROOT"]) / "uie" / "shot_dir.txt"
+    shot_pointer = runs / "uie" / "shot_dir.txt"
     shot_dir = require_10shot(Path(shot_pointer.read_text(encoding="utf-8").strip()))
     model_path = Path(report["derived_model_dir"])
-    if (model_path / "pytorch_model.bin").is_file() or any(model_path.glob("*.bin")):
+    if not model_path.is_dir() or any(model_path.glob("*.bin")):
         fail("J13 refuses to train from pytorch_model.bin")
-    current = build_fingerprint(uie_root, shot_dir, model_path)
-    _require_fingerprint_match(saved, current, report)
-    output_dir = Path(os.environ["P3_RUNS_ROOT"]) / "uie" / "train" / "seed1-10shot"
+    assert_frozen_experiment(uie_root, shot_dir, model_path, runs / "uie" / "train" / "seed1-10shot")
+    require_trainer_runtime()
+    _require_probe(runs)
+    output_dir = runs / "uie" / "train" / "seed1-10shot"
     output_dir.mkdir(parents=True, exist_ok=True)
     if any(output_dir.iterdir()):
         fail(f"training output already exists and is not empty: {output_dir}")
-    eval_steps = _eval_steps(uie_root, shot_dir / "train.json")
-    argv = training_argv(
-        uie_root=uie_root,
-        train_dir=shot_dir,
-        model_path=model_path,
-        output_dir=output_dir,
-        eval_steps=eval_steps,
-    )
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(uie_root)
-    env["TOKENIZERS_PARALLELISM"] = "false"
-    print("RUN " + " ".join(argv), flush=True)
-    completed = subprocess.run([sys.executable, *argv], cwd=uie_root, env=env)
-    if completed.returncode != 0:
-        fail(f"UIE trainer exited {completed.returncode}")
-    _collect(output_dir)
+    job_id = os.environ.get("SLURM_JOB_ID") or "local"
+    lock_path = runs / "uie" / "train" / "publish.lock"
+    _acquire_lock(lock_path, job_id)
+    try:
+        verify_derived_file(model_path / "model.safetensors")
+        current = build_fingerprint(uie_root, shot_dir, model_path)
+        _require_fingerprint_match(saved, current, report)
+        eval_steps = _eval_steps(uie_root, shot_dir / "train.json")
+        argv = adapt_training_argv(
+            training_argv(
+                uie_root=uie_root,
+                train_dir=shot_dir,
+                model_path=model_path,
+                output_dir=output_dir,
+                eval_steps=eval_steps,
+            )
+        )
+        env = os.environ.copy()
+        scripts = str(Path(__file__).resolve().parent)
+        env["PYTHONPATH"] = str(uie_root) + os.pathsep + scripts
+        if os.environ.get("PYTHONPATH"):
+            env["PYTHONPATH"] += os.pathsep + os.environ["PYTHONPATH"]
+        env["TOKENIZERS_PARALLELISM"] = "false"
+        env["HF_HUB_OFFLINE"] = "1"
+        env["TRANSFORMERS_OFFLINE"] = "1"
+        env[LAUNCH_ENV] = "1"
+        launcher = Path(__file__).resolve().with_name("uie_trainer_launch.py")
+        print("RUN " + " ".join(argv), flush=True)
+        completed = subprocess.run(
+            [sys.executable, str(launcher), *argv],
+            cwd=uie_root,
+            env=env,
+        )
+        if completed.returncode != 0:
+            fail(f"UIE trainer exited {completed.returncode}")
+        _collect(output_dir)
+    finally:
+        _release_lock(lock_path, job_id)
     print("PASS J13 seed1/10shot training", flush=True)
     return 0
 

@@ -20,6 +20,7 @@ echo "CREATE ${UIE_TRAIN_VENV}"
   --index-url https://download.pytorch.org/whl/cu121
 "${UIE_TRAIN_VENV}/bin/python" -m pip install \
   "transformers==4.57.6" \
+  "accelerate>=0.26.0" \
   "sentencepiece>=0.2,<0.3" \
   "numpy" \
   "datasets" \
