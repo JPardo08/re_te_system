@@ -77,9 +77,10 @@ def adapt_training_argv(argv: list[str]) -> list[str]:
 def restore_removed_trainer_attributes(trainer: object) -> None:
     """Restore attributes Transformers 4.57.6 no longer sets on the trainer.
 
-    _max_length and _num_beams stay None so the upstream prediction step still
-    falls back to the model config, which the trainer sets from max_target_length.
-    use_amp follows fp16/bf16. The frozen argv enables neither.
+    _max_length and _num_beams stay None at init. generation_max_length and
+    generation_num_beams are absent from the frozen argv. The prediction-step
+    shim resolves the length when evaluation actually runs. use_amp follows
+    fp16/bf16. The frozen argv enables neither.
     """
 
     args = getattr(trainer, "args", None)
@@ -91,6 +92,123 @@ def restore_removed_trainer_attributes(trainer: object) -> None:
         trainer.use_amp = bool(
             getattr(args, "fp16", False) or getattr(args, "bf16", False)
         )
+
+
+def _specified_int(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
+
+
+def _first_specified_int(values: list[object]) -> int | None:
+    for value in values:
+        resolved = _specified_int(value)
+        if resolved is not None:
+            return resolved
+    return None
+
+
+def _stored_generation_value(trainer: object, key: str) -> object:
+    stored = getattr(trainer, "_gen_kwargs", None)
+    if isinstance(stored, dict) and key in stored:
+        return stored[key]
+    return None
+
+
+def resolve_generation_max_length(trainer: object, gen_kwargs: dict | None = None) -> int | None:
+    """Choose the length UIE's prediction step will pass to generate.
+
+    An explicit evaluate or predict argument wins. Otherwise the trainer
+    attribute, then the model config, then the generation config. The last
+    one matters after save_pretrained moves a non-default config.max_length
+    onto generation_config and sets the config attribute to None. A missing
+    or non-positive value is skipped so None is not forwarded.
+    """
+
+    supplied = gen_kwargs or {}
+    model = getattr(trainer, "model", None)
+    config = getattr(model, "config", None)
+    generation = getattr(model, "generation_config", None)
+    return _first_specified_int(
+        [
+            supplied.get("max_length"),
+            _stored_generation_value(trainer, "max_length"),
+            getattr(trainer, "_max_length", None),
+            getattr(config, "max_length", None),
+            getattr(generation, "max_length", None),
+        ]
+    )
+
+
+def resolve_generation_num_beams(trainer: object, gen_kwargs: dict | None = None) -> int | None:
+    """Choose num_beams without treating an explicit None as a value.
+
+    The frozen argv does not set num_beams. DataTrainingArguments defaults it
+    to None, and the explicit evaluate call forwards that None. None means
+    the call did not choose a beam count.
+    """
+
+    supplied = gen_kwargs or {}
+    model = getattr(trainer, "model", None)
+    config = getattr(model, "config", None)
+    generation = getattr(model, "generation_config", None)
+    return _first_specified_int(
+        [
+            supplied.get("num_beams"),
+            _stored_generation_value(trainer, "num_beams"),
+            getattr(trainer, "_num_beams", None),
+            getattr(config, "num_beams", None),
+            getattr(generation, "num_beams", None),
+        ]
+    )
+
+
+_UPSTREAM_PREDICTION_STEP = None
+
+
+def compatible_prediction_step(
+    self,
+    model,
+    inputs,
+    prediction_loss_only,
+    ignore_keys=None,
+    **gen_kwargs,
+):
+    """Give the pinned prediction step a real length before it calls generate.
+
+    The pinned method reads _max_length and _num_beams, then the model config.
+    It does not read _gen_kwargs. Transformers 4.57.6 stores the explicit
+    evaluate and predict arguments there. This wrapper copies a resolved
+    positive integer onto the attributes for the call and restores them after.
+    The pinned method still builds prefix_allowed_tokens_fn.
+    """
+
+    if _UPSTREAM_PREDICTION_STEP is None:
+        fail("J13 prediction step shim is not installed")
+    generates = bool(getattr(getattr(self, "args", None), "predict_with_generate", False)) and not prediction_loss_only
+    length = resolve_generation_max_length(self, gen_kwargs)
+    beams = resolve_generation_num_beams(self, gen_kwargs)
+    if generates and length is None:
+        fail("J13 generation length is missing; refusing to call generate with max_length None")
+    if generates and beams is None:
+        fail("J13 generation num_beams is missing; refusing to call generate with num_beams None")
+    previous_length = getattr(self, "_max_length", None)
+    previous_beams = getattr(self, "_num_beams", None)
+    if length is not None:
+        self._max_length = length
+    if beams is not None:
+        self._num_beams = beams
+    try:
+        return _UPSTREAM_PREDICTION_STEP(
+            self,
+            model,
+            inputs,
+            prediction_loss_only,
+            ignore_keys=ignore_keys,
+        )
+    finally:
+        self._max_length = previous_length
+        self._num_beams = previous_beams
 
 
 def compatible_training_step(self, model, inputs, num_items_in_batch=None):
@@ -248,6 +366,10 @@ def install_shims(uie_root: Path) -> None:
     AutoConfig.from_pretrained = force_local_companion(AutoConfig.from_pretrained)
     AutoTokenizer.from_pretrained = force_local_companion(AutoTokenizer.from_pretrained)
 
+    global _UPSTREAM_PREDICTION_STEP
+    if _UPSTREAM_PREDICTION_STEP is None:
+        _UPSTREAM_PREDICTION_STEP = ConstraintSeq2SeqTrainer.prediction_step
+
     original_init = ConstraintSeq2SeqTrainer.__init__
 
     def _init(self, *args, **kwargs):
@@ -256,4 +378,5 @@ def install_shims(uie_root: Path) -> None:
 
     ConstraintSeq2SeqTrainer.__init__ = _init
     ConstraintSeq2SeqTrainer.training_step = compatible_training_step
+    ConstraintSeq2SeqTrainer.prediction_step = compatible_prediction_step
     ConstraintSeq2SeqTrainer._maybe_log_save_evaluate = compatible_maybe_log_save_evaluate

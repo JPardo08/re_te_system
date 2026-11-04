@@ -485,6 +485,151 @@ def test_trainer_signature_shims(
     assert restored.use_amp is False
 
 
+def _generation_double(*, config_length, generation_length, config_beams, generation_beams, gen_kwargs):
+    calls: list[dict] = []
+
+    class Model:
+        def __init__(self) -> None:
+            self.config = type("Config", (), {"max_length": config_length, "num_beams": config_beams})()
+            self.generation_config = type(
+                "Generation",
+                (),
+                {"max_length": generation_length, "num_beams": generation_beams},
+            )()
+
+        def generate(self, *_args, **kwargs):
+            calls.append(kwargs)
+
+    class Trainer:
+        def __init__(self) -> None:
+            self.args = type("Args", (), {"predict_with_generate": True})()
+            self._max_length = None
+            self._num_beams = None
+            self._gen_kwargs = dict(gen_kwargs)
+            self.model = Model()
+            self.constraint_decoder = "uie-constraint"
+
+    def pinned(trainer, model, _inputs, _prediction_loss_only, ignore_keys=None):
+        del ignore_keys
+        forwarded = {
+            "max_length": trainer._max_length if trainer._max_length is not None else trainer.model.config.max_length,
+            "num_beams": trainer._num_beams if trainer._num_beams is not None else trainer.model.config.num_beams,
+            "prefix_allowed_tokens_fn": trainer.constraint_decoder,
+        }
+        applied = type("Applied", (), {"max_length": 20, "num_beams": 1})()
+        for key in ("max_length", "num_beams"):
+            setattr(applied, key, forwarded[key])
+        calls.append({"applied": applied, "forwarded": forwarded})
+        model.generate(None, **forwarded)
+        return "prediction"
+
+    return Trainer(), calls, pinned
+
+
+def test_generation_length_survives_the_explicit_evaluate_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    automatic, automatic_calls, pinned = _generation_double(
+        config_length=192,
+        generation_length=20,
+        config_beams=1,
+        generation_beams=4,
+        gen_kwargs={},
+    )
+    monkeypatch.setattr(compat, "_UPSTREAM_PREDICTION_STEP", pinned)
+    assert compat.compatible_prediction_step(automatic, automatic.model, {}, False) == "prediction"
+    assert automatic_calls[0]["forwarded"]["max_length"] == 192
+    assert automatic_calls[0]["applied"].max_length == 192
+    assert automatic_calls[0]["forwarded"]["prefix_allowed_tokens_fn"] == "uie-constraint"
+    assert automatic._max_length is None
+
+    moved, moved_calls, pinned = _generation_double(
+        config_length=None,
+        generation_length=192,
+        config_beams=None,
+        generation_beams=1,
+        gen_kwargs={},
+    )
+    monkeypatch.setattr(compat, "_UPSTREAM_PREDICTION_STEP", pinned)
+    compat.compatible_prediction_step(moved, moved.model, {}, False)
+    assert moved_calls[0]["forwarded"]["max_length"] == 192
+    assert moved_calls[0]["forwarded"]["num_beams"] == 1
+    assert moved_calls[0]["applied"].max_length is not None
+
+    explicit, explicit_calls, pinned = _generation_double(
+        config_length=None,
+        generation_length=192,
+        config_beams=None,
+        generation_beams=1,
+        gen_kwargs={"max_length": 192, "num_beams": None},
+    )
+    monkeypatch.setattr(compat, "_UPSTREAM_PREDICTION_STEP", pinned)
+    compat.compatible_prediction_step(explicit, explicit.model, {}, False)
+    assert explicit_calls[0]["forwarded"]["max_length"] == 192
+    assert explicit_calls[0]["forwarded"]["num_beams"] == 1
+    assert None not in explicit_calls[0]["forwarded"].values()
+
+    override, override_calls, pinned = _generation_double(
+        config_length=192,
+        generation_length=20,
+        config_beams=1,
+        generation_beams=4,
+        gen_kwargs={"max_length": 64, "num_beams": 2},
+    )
+    monkeypatch.setattr(compat, "_UPSTREAM_PREDICTION_STEP", pinned)
+    compat.compatible_prediction_step(override, override.model, {}, False)
+    assert override_calls[0]["forwarded"]["max_length"] == 64
+    assert override_calls[0]["forwarded"]["num_beams"] == 2
+    assert override._num_beams is None
+
+    missing, _missing_calls, pinned = _generation_double(
+        config_length=None,
+        generation_length=None,
+        config_beams=None,
+        generation_beams=None,
+        gen_kwargs={"max_length": None, "num_beams": None},
+    )
+    monkeypatch.setattr(compat, "_UPSTREAM_PREDICTION_STEP", pinned)
+    with pytest.raises(SystemExit):
+        compat.compatible_prediction_step(missing, missing.model, {}, False)
+    assert "max_length None" in capsys.readouterr().out
+
+    shot = tmp_path / "seed1" / "10shot"
+    shot.mkdir(parents=True)
+    frozen = train_config.training_argv(
+        uie_root=tmp_path / "UIE",
+        train_dir=shot,
+        model_path=tmp_path / "model",
+        output_dir=tmp_path / "out",
+        eval_steps=80,
+    )
+    assert train_config.MAX_TARGET_LENGTH == "192"
+    assert "--max_target_length=192" in frozen
+    assert "--do_eval" in frozen
+    assert "--do_predict" in frozen
+    assert "--predict_with_generate" in frozen
+    assert not any(
+        item.startswith("--num_beams") or item.startswith("--generation_max_length") or item.startswith("--max_new_tokens")
+        for item in frozen
+    )
+    upstream = ROOT.parent / "_legacy" / "UIE"
+    prediction = (upstream / "uie" / "seq2seq" / "constrained_seq2seq.py").read_text(encoding="utf-8")
+    finetune = (upstream / "run_uie_finetune.py").read_text(encoding="utf-8")
+    assert "self._max_length if self._max_length is not None else self.model.config.max_length" in prediction
+    assert "prefix_allowed_tokens_fn" in prediction
+    assert "config.max_length = data_args.max_target_length" in finetune
+    assert "trainer.evaluate(max_length=data_args.val_max_target_length, num_beams=data_args.num_beams)" in finetune
+    arguments = (upstream / "uie" / "seq2seq" / "trainer_arguments.py").read_text(encoding="utf-8")
+    assert "self.val_max_target_length = self.max_target_length" in arguments
+    compat_source = (SCRIPTS / "uie_trainer_compat.py").read_text(encoding="utf-8")
+    assert "ConstraintSeq2SeqTrainer.prediction_step = compatible_prediction_step" in compat_source
+    assert "GenerationMixin" not in compat_source
+    assert "install_shims(" in (SCRIPTS / "uie_trainer_launch.py").read_text(encoding="utf-8")
+    assert "install_shims(" in (SCRIPTS / "j13_uie_integration_probe.py").read_text(encoding="utf-8")
+
+
 def test_dataset_loader_does_not_call_the_removed_script_api(capsys: pytest.CaptureFixture[str]) -> None:
     def original(*_args, **_kwargs):
         raise AssertionError("dataset script loader was called")
