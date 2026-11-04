@@ -8,7 +8,14 @@
 #SBATCH --time=04:00:00
 
 set -euo pipefail
+saved_load="${UIE_J12_DERIVED_LOAD_AUTHORIZED:-}"
 source /home/y064/PROJECT/y064644/paper3/re_te_system/scripts/cesvima/env.sh
+if [[ -n "${saved_load}" ]]; then
+  export UIE_J12_DERIVED_LOAD_AUTHORIZED="${saved_load}"
+else
+  unset UIE_J12_DERIVED_LOAD_AUTHORIZED
+fi
+unset UIE_SAFETENSORS_CONVERT_AUTHORIZED
 cesvima_guard
 cesvima_prepare_runtime_dirs
 cd "${P3_SLURM_LOG_DIR}"

@@ -12,6 +12,7 @@ from pathlib import Path
 from cesvima_common import fail, read_json, require_cuda_family, write_json
 from uie_fingerprint import assess_preflight_inputs, build_fingerprint, fingerprint_digest
 from uie_origin_pin import ORIGIN_BIN_SHA256, ORIGIN_REVISION
+from uie_safetensors_conversion import inspect_conversion_evidence, provenance_digest
 
 
 def _first_train_row(shot_dir: Path) -> dict:
@@ -42,7 +43,11 @@ def _run_batch(uie_root: Path, shot_dir: Path, model_path: Path) -> None:
         fail(f"upstream null span is {null_span}")
     device_name = require_cuda_family("V100")
     tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
-    model = AutoModelForSeq2SeqLM.from_pretrained(model_path, local_files_only=True)
+    model = AutoModelForSeq2SeqLM.from_pretrained(
+        model_path,
+        local_files_only=True,
+        use_safetensors=True,
+    )
     model.to("cuda")
     schema = RecordSchema.read_from_file(str(shot_dir / "record.schema"))
     sampler = DynamicSSIGenerator(
@@ -156,21 +161,19 @@ def main() -> int:
         origin_dir = _optional_json_path(origin_pointer, "local_path")
         if origin_dir is not None:
             origin_bin = origin_dir / "pytorch_model.bin"
-    derived_pointer = runs / "uie" / "derived_snapshot.json"
-    derived_record: dict = {}
-    if derived_pointer.is_file():
-        loaded_record = read_json(derived_pointer)
-        if isinstance(loaded_record, dict):
-            derived_record = loaded_record
-    model_value = derived_record.get("local_path")
+    claim, claim_errors = inspect_conversion_evidence(runs)
+    model_value = claim.get("derived_path") if isinstance(claim, dict) else None
     model_dir = Path(model_value) if isinstance(model_value, str) and model_value.strip() else None
     assessment = assess_preflight_inputs(
         shot_dir,
         model_dir,
         origin_bin,
         origin_dir,
-        provenance=derived_record or None,
+        provenance=claim,
     )
+    for item in claim_errors:
+        assessment["errors"].append(item)
+        assessment["ready"] = False
     if origin_pointer.is_file() and not origin_revision_ok:
         assessment["errors"].append("base snapshot revision is not the pinned origin")
         assessment["ready"] = False
@@ -230,18 +233,20 @@ def main() -> int:
     _write_once(fingerprint_path, fingerprint)
     _write_once(
         report_path,
-        {
-            "deserialization_authorized": False,
-            "derived_model_dir": str(model_dir),
-            "derived_weight_hashes": fingerprint.get("derived_weight_hashes", {}),
-            "error": error,
-            "fingerprint_sha256": digest,
-            "frozen_10shot_hashes": fingerprint.get("frozen_10shot_hashes", {}),
-            "origin_bin_sha256_pin": ORIGIN_BIN_SHA256,
-            "origin_verification": assessment["origin"],
-            "slurm_job_id": job_id,
-            "status": status,
-        },
+            {
+                "conversion_job_id": None if claim is None else claim.get("conversion_job_id"),
+                "deserialization_authorized": False,
+                "derived_model_dir": str(model_dir),
+                "derived_provenance_sha256": None if claim is None else provenance_digest(claim),
+                "derived_weight_hashes": fingerprint.get("derived_weight_hashes", {}),
+                "error": error,
+                "fingerprint_sha256": digest,
+                "frozen_10shot_hashes": fingerprint.get("frozen_10shot_hashes", {}),
+                "origin_bin_sha256_pin": ORIGIN_BIN_SHA256,
+                "origin_verification": assessment["origin"],
+                "slurm_job_id": job_id,
+                "status": status,
+            },
     )
     if status == "PREFLIGHT_PASS":
         pointer.write_text(job_id + "\n", encoding="utf-8")

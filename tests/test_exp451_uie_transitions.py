@@ -323,6 +323,7 @@ def test_j12_requires_recomputed_provenance_before_the_batch(
     (runs / "uie" / "derived_snapshot.json").write_text(json.dumps(snapshot), encoding="utf-8")
     monkeypatch.setattr(origin, "CONVERSION_ENABLED", True)
     monkeypatch.setattr(origin, "UIE_J12_DERIVED_LOAD_AUTHORIZED", True)
+    monkeypatch.setenv("UIE_J12_DERIVED_LOAD_AUTHORIZED", "1")
     monkeypatch.setattr(
         fingerprint,
         "frozen_shot_identity",
@@ -344,7 +345,47 @@ def test_j12_requires_recomputed_provenance_before_the_batch(
 
     (runs / "uie" / "preflight" / "jobs" / "1349123" / "preflight_report.json").unlink()
     (runs / "uie" / "preflight" / "jobs" / "1349123" / "environment_fingerprint.json").unlink()
-    (runs / "uie" / "derived_snapshot.json").write_text(json.dumps(snapshot), encoding="utf-8")
+    derived_root = runs.parent / "derived"
+    import torch
+
+    weight = torch.tensor([1.0, 2.0], dtype=torch.float32)
+    verified = conversion.write_verified_safetensors(
+        {"lm_head.weight": weight, "shared.weight": weight},
+        derived_root / "model.safetensors",
+    )
+    config = b'{"model_type":"t5"}\n'
+    tokenizer = b"{}\n"
+    (derived_root / "config.json").write_bytes(config)
+    (derived_root / "tokenizer_config.json").write_bytes(tokenizer)
+    file_digest = hashlib.sha256((derived_root / "model.safetensors").read_bytes()).hexdigest()
+    provenance["derived_path"] = str(derived_root)
+    provenance["derived_tensors"] = verified["derived_tensors"]
+    provenance["origin_tensors"] = verified["origin_tensors"]
+    provenance["alias_contract"] = verified["alias_contract"]
+    provenance["reported_loaded_sha256"] = file_digest
+    provenance["copied_files"] = {
+        "config.json": {"bytes": len(config), "sha256": hashlib.sha256(config).hexdigest()},
+        "tokenizer_config.json": {
+            "bytes": len(tokenizer),
+            "sha256": hashlib.sha256(tokenizer).hexdigest(),
+        },
+    }
+    provenance.update(
+        {
+            "conversion_job_id": "1353001",
+            "origin_unchanged": True,
+            "revision": origin.ORIGIN_REVISION,
+            "slurm_job_id": "1353001",
+            "status": "CONVERSION_PASS",
+            "use_safetensors": True,
+            "verified": True,
+            "weights_only": True,
+        }
+    )
+    report_path = runs / "uie" / "conversion" / "jobs" / "1353001" / "conversion_report.json"
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text(json.dumps(provenance), encoding="utf-8")
+    (runs / "uie" / "conversion" / "accepted_job_id.txt").write_text("1353001\n", encoding="utf-8")
 
     def fake_fingerprint(*_args: object, **_kwargs: object) -> dict[str, object]:
         calls.append("fingerprint")

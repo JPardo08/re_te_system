@@ -10,7 +10,14 @@ from pathlib import Path
 
 from cesvima_common import canonical_json, fail, sha256_file
 import uie_origin_pin as origin_pin
-from uie_safetensors_conversion import derived_provenance_accepted
+from uie_safetensors_conversion import (
+    conversion_report_is_bound,
+    derived_provenance_accepted,
+    inspect_conversion_evidence,
+    j12_load_authorized,
+    provenance_digest,
+    verify_derived_material,
+)
 
 
 HASHED_UPSTREAM = (
@@ -101,10 +108,17 @@ def assess_preflight_inputs(
     provenance_verdict = derived_provenance_accepted(derived, provenance, origin)
     if not provenance_verdict["accepted"]:
         errors.append("derived provenance is not verified")
-    if not origin_pin.CONVERSION_ENABLED:
+    # The module constants stay false. Readiness follows the conversion report
+    # and the J12 environment grant, which are independent of each other.
+    report_bound = conversion_report_is_bound(provenance) and provenance_verdict["accepted"] is True
+    if not report_bound:
         errors.append("safetensors conversion is disabled")
-    if not origin_pin.UIE_J12_DERIVED_LOAD_AUTHORIZED:
+    if not j12_load_authorized():
         errors.append("J12 derived load is not authorized")
+    material_errors: list[str] = []
+    if model_dir is not None and isinstance(provenance, dict) and report_bound:
+        material_errors = verify_derived_material(model_dir, provenance)
+        errors.extend(material_errors)
     identity_ok = bool(derived["ok"])
     return {
         "derived": derived,
@@ -116,9 +130,9 @@ def assess_preflight_inputs(
         "ready": bool(
             shot["ok"]
             and identity_ok
-            and provenance_verdict["accepted"]
-            and origin_pin.CONVERSION_ENABLED
-            and origin_pin.UIE_J12_DERIVED_LOAD_AUTHORIZED
+            and report_bound
+            and j12_load_authorized()
+            and not material_errors
         ),
         "shot": shot,
     }
@@ -129,6 +143,17 @@ def build_fingerprint(uie_root: Path, shot_dir: Path, model_dir: Path) -> dict:
     problems = list(content["shot"]["errors"]) + list(content["derived"]["errors"])
     if problems:
         fail("fingerprint content is incomplete: " + "; ".join(problems))
+    runs_raw = os.environ.get("P3_RUNS_ROOT")
+    if not runs_raw:
+        fail("fingerprint content is incomplete: conversion evidence is absent")
+    claim, claim_errors = inspect_conversion_evidence(Path(runs_raw))
+    if claim is None or claim_errors:
+        fail(
+            "fingerprint content is incomplete: "
+            + "; ".join(claim_errors or ["conversion evidence is absent"])
+        )
+    if Path(str(claim.get("derived_path"))).resolve() != model_dir.resolve():
+        fail("fingerprint model directory is not the accepted derivative")
     import torch
     import transformers
 
@@ -159,7 +184,9 @@ def build_fingerprint(uie_root: Path, shot_dir: Path, model_dir: Path) -> dict:
         fail(f"UIE training environment is missing a required package: {extra}")
     return {
         "base_checkpoint_revision": "966f8b1fc4c74e94ab552081605913ad5133cc41",
+        "conversion_job_id": claim["conversion_job_id"],
         "cuda_device_name": device_name,
+        "derived_provenance_sha256": provenance_digest(claim),
         "derived_weight_hashes": content["derived"]["files"],
         "extra_packages": extra,
         "frozen_10shot_hashes": {

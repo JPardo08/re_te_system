@@ -9,6 +9,11 @@ The upstream trainer still calls AutoModelForSeq2SeqLM.from_pretrained with
 mirror='tuna' in _legacy/UIE/run_uie_finetune.py. Compatibility of that
 argument with Transformers 4.57.6 is unverified. This module does not patch
 the trainer and does not import Transformers.
+
+The operational conversion and J12 load grants are environment variables
+read by uie_safetensors_conversion. They do not flip these constants, and
+derived_load_permitted stays false because origin deserialization stays
+unauthorized.
 """
 
 from __future__ import annotations
