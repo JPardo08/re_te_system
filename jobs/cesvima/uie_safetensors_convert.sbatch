@@ -9,6 +9,8 @@
 #SBATCH --error=uie-safetensors-%j.err
 # CPU conversion of the pinned UIE pytorch_model.bin. Do not use uie-train.
 # A CUDA build of the interpreter is not a GPU request: this job asks for none.
+# Hashing is one thread. More CPUs or a GPU do not shorten it.
+# 32G covers the loaded state dict and its clone. 02:00:00 is a ceiling.
 # Source env.sh, then run the operator-supplied Python. Do not edit env.sh.
 # This file is not selected by submit_train_first.sh --all.
 

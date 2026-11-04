@@ -25,6 +25,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -197,8 +198,30 @@ def convert_origin_to_safetensors(
     return convert_pinned_origin(origin_bin.parent, destination, scratch_root(), job_id)
 
 
+def _log_stage(stage: str, started: float, nbytes: int | None = None) -> float:
+    """Finish one phase. The next line is absent while that phase is still running."""
+    now = time.monotonic()
+    message = f"STAGE {stage} elapsed_s={now - started:.3f}"
+    if nbytes is not None:
+        message += f" bytes={nbytes}"
+    print(message, flush=True)
+    return now
+
+
+def _state_dict_nbytes(tensors: Mapping[str, object]) -> int:
+    total = 0
+    for value in tensors.values():
+        total += int(value.numel() * value.element_size())  # type: ignore[attr-defined]
+    return total
+
+
 def tensor_values_sha256(tensor: object) -> str:
-    """SHA-256 of the contiguous little-endian CPU bytes. No header."""
+    """SHA-256 of the contiguous little-endian CPU bytes. No header.
+
+    The digest covers the same bytes as a C-contiguous copy. Those bytes are
+    read through a uint8 view, not through bytes(storage): an untyped storage
+    has no buffer export, so bytes() would walk one Python integer per byte.
+    """
     import torch
 
     if sys.byteorder != "little":
@@ -208,11 +231,21 @@ def tensor_values_sha256(tensor: object) -> str:
     cpu = tensor.detach().to(device="cpu").contiguous()
     if cpu.layout != torch.strided:
         raise ConversionDisabled("tensor content hash requires a dense strided tensor")
-    nbytes = cpu.numel() * cpu.element_size()
+    nbytes = int(cpu.numel() * cpu.element_size())
     storage = cpu.untyped_storage()
     if storage.nbytes() != nbytes:
         raise ConversionDisabled("tensor content hash requires exact storage coverage")
-    payload = bytes(storage) if nbytes else b""
+    if nbytes == 0:
+        return hashlib.sha256(b"").hexdigest()
+    raw = cpu.view(torch.uint8)
+    if int(raw.numel()) != nbytes or not raw.is_contiguous():
+        raise ConversionDisabled("tensor content hash requires an exact uint8 view")
+    try:
+        payload = raw.numpy()
+    except Exception as exc:
+        raise ConversionDisabled(f"tensor content hash cannot view bytes: {exc}") from exc
+    if int(payload.nbytes) != nbytes:
+        raise ConversionDisabled("tensor content hash view does not cover the tensor")
     return hashlib.sha256(payload).hexdigest()
 
 
@@ -263,26 +296,46 @@ def storage_ids(tensors: dict) -> tuple[dict[str, str], list[list[str]]]:
     return ids, shared
 
 
-def materialize_independent_tensors(tensors: dict) -> tuple[dict, list[list[str]], dict[str, str]]:
-    """Clone complete shared tensors. Values stay equal; the alias is not kept."""
+def materialize_independent_tensors(
+    tensors: dict,
+) -> tuple[dict, list[list[str]], dict[str, str], dict[str, str]]:
+    """Clone complete shared tensors. Values stay equal; the alias is not kept.
+
+    Each origin tensor is hashed once. The clone is hashed once and compared.
+    The returned digests belong to those immutable origin values.
+    """
     ids, shared = storage_ids(tensors)
+    started = time.monotonic()
     independent = {
         name: tensor.detach().to(device="cpu").contiguous().clone()
         for name, tensor in tensors.items()
     }
+    payload_bytes = _state_dict_nbytes(tensors)
+    _log_stage("clone", started, payload_bytes)
+    started = time.monotonic()
+    digests: dict[str, str] = {}
     for name, original in tensors.items():
-        if tensor_values_sha256(original) != tensor_values_sha256(independent[name]):
+        origin_digest = tensor_values_sha256(original)
+        if origin_digest != tensor_values_sha256(independent[name]):
             raise ConversionDisabled(f"clone changed tensor values: {name}")
-    return independent, shared, ids
+        digests[name] = origin_digest
+    # Origin and clone are both read. The byte count is the work, not one tensor.
+    _log_stage("hash", started, payload_bytes * 2)
+    return independent, shared, ids, digests
 
 
-def _tensor_record(name: str, tensor: object, storage_id: str) -> dict[str, object]:
+def _tensor_record(
+    name: str,
+    tensor: object,
+    storage_id: str,
+    digest: str | None = None,
+) -> dict[str, object]:
     return {
         "dtype": str(tensor.dtype),  # type: ignore[attr-defined]
         "name": name,
         "shape": list(tensor.shape),  # type: ignore[attr-defined]
         "storage_id": storage_id,
-        "values_sha256": tensor_values_sha256(tensor),
+        "values_sha256": tensor_values_sha256(tensor) if digest is None else digest,
     }
 
 
@@ -307,10 +360,16 @@ def write_verified_safetensors(tensors: dict, destination_file: Path) -> dict[st
         raise ConversionDisabled("refusing to overwrite a safetensors file")
     if not tensors:
         raise ConversionDisabled("state dict is empty")
+    started = time.monotonic()
     origin_ids, origin_groups = storage_ids(tensors)
-    independent, shared, _ids = materialize_independent_tensors(tensors)
+    payload_bytes = _state_dict_nbytes(tensors)
+    _log_stage("aliases", started, payload_bytes)
+    independent, shared, _ids, origin_digests = materialize_independent_tensors(tensors)
     destination_file.parent.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
     save_file(independent, str(destination_file), metadata={"format": "pt"})
+    _log_stage("safetensors_write", started, destination_file.stat().st_size)
+    started = time.monotonic()
     reloaded = load_file(str(destination_file))
     if set(reloaded) != set(tensors):
         raise ConversionDisabled("reloaded safetensors keys differ from the origin state dict")
@@ -324,11 +383,14 @@ def write_verified_safetensors(tensors: dict, destination_file: Path) -> dict[st
             raise ConversionDisabled(f"reloaded tensor metadata differs: {name}")
         if not torch.equal(current, independent[name]):
             raise ConversionDisabled(f"reloaded tensor values differ: {name}")
-        origin_digest = tensor_values_sha256(original)
-        if origin_digest != tensor_values_sha256(current):
+        # The reload is a new tensor. Its digest is computed here and is not
+        # reused from the origin or the clone.
+        reload_digest = tensor_values_sha256(current)
+        if origin_digests[name] != reload_digest:
             raise ConversionDisabled(f"reloaded tensor digest differs: {name}")
-        origin_records.append(_tensor_record(name, original, origin_ids[name]))
-        derived_records.append(_tensor_record(name, current, derived_ids[name]))
+        origin_records.append(_tensor_record(name, original, origin_ids[name], origin_digests[name]))
+        derived_records.append(_tensor_record(name, current, derived_ids[name], reload_digest))
+    _log_stage("reload_equivalence", started, payload_bytes)
     if any(destination_file.parent.glob("*.bin")):
         raise ConversionDisabled("derived directory contains a pickle weight")
     return {
@@ -530,10 +592,12 @@ def convert_pinned_origin(
             raise ConversionDisabled("origin pytorch_model.bin escapes the authorized cache")
     elif not bin_path.is_file() or not _inside(origin, bin_path.resolve()):
         raise ConversionDisabled("origin pytorch_model.bin is absent")
+    started = time.monotonic()
     before = sha256_file(bin_path)
     size = bin_path.stat().st_size
     if not origin_identity_matches(size, before):
         raise ConversionDisabled("origin pytorch_model.bin is not the pinned checkpoint")
+    _log_stage("pin", started, size)
     _require_job_id(job_id)
     _assert_destination(origin, destination, scratch, job_id)
     space = scratch_capacity(_existing_anchor(destination.parent), size * 2)
@@ -542,11 +606,14 @@ def convert_pinned_origin(
     created = False
     try:
         partial.parent.mkdir(parents=True, exist_ok=True)
+        started = time.monotonic()
         try:
             partial.mkdir()
         except FileExistsError:
             raise ConversionDisabled("refusing to resume a partial derived snapshot") from None
         created = True
+        _log_stage("partial", started)
+        started = time.monotonic()
         copied: dict[str, dict[str, object]] = {}
         ignored: list[str] = []
         for entry in sorted(origin.iterdir(), key=lambda item: item.name):
@@ -572,14 +639,20 @@ def convert_pinned_origin(
         for name in REQUIRED_COMPANIONS:
             if name not in copied:
                 raise ConversionDisabled(f"required companion is absent: {name}")
+        companion_bytes = sum(int(item["bytes"]) for item in copied.values())
+        _log_stage("companions", started, companion_bytes)
+        started = time.monotonic()
         loaded = _load_origin_bin(bin_path)
+        _log_stage("load", started, _state_dict_nbytes(loaded))
         verified = write_verified_safetensors(loaded, partial / "model.safetensors")
         if any(partial.glob("*.bin")):
             raise ConversionDisabled("derived directory contains a pickle weight")
+        started = time.monotonic()
         after_size = bin_path.stat().st_size
         after = sha256_file(bin_path)
         if after != before or after_size != size:
             raise ConversionDisabled("origin pytorch_model.bin changed during conversion")
+        _log_stage("origin_rehash", started, after_size)
         output = _file_record(partial / "model.safetensors")
         material_errors = verify_derived_material(
             partial,
@@ -592,8 +665,10 @@ def convert_pinned_origin(
         )
         if material_errors:
             raise ConversionDisabled("; ".join(material_errors))
+        started = time.monotonic()
         _publish_directory(partial, destination)
         created = False
+        _log_stage("publish_directory", started, int(output["bytes"]))
     except BaseException:
         if created and partial.exists() and not partial.is_symlink():
             shutil.rmtree(partial)
@@ -724,6 +799,7 @@ def _write_success(runs: Path, job_id: str, payload: dict[str, object]) -> None:
         fail("refusing to follow an evidence symlink")
     if report.exists() or pointer.exists():
         fail(f"refusing to overwrite existing evidence: {report if report.exists() else pointer}")
+    started = time.monotonic()
     _exclusive_json(report, payload)
     pointer.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -731,6 +807,7 @@ def _write_success(runs: Path, job_id: str, payload: dict[str, object]) -> None:
     except FileExistsError:
         fail(f"refusing to overwrite existing evidence: {pointer}")
     print(f"WROTE {pointer}", flush=True)
+    _log_stage("accepted", started, pointer.stat().st_size)
 
 
 def _conversion_report_errors(report: Mapping[str, object], job_id: str) -> list[str]:
@@ -1009,7 +1086,9 @@ def verify_derived_material(model_dir: Path, provenance: Mapping[str, object]) -
         errors.append("conversion tensor records repeat a name")
         return errors
     try:
+        started = time.monotonic()
         records, groups = _records_from_safetensors(weight)
+        _log_stage("recheck_tensors", started, weight.stat().st_size)
         compared = compare_tensor_records(declared, records)
     except (ConversionDisabled, OSError, TypeError, ValueError, KeyError) as exc:
         errors.append(f"reloaded tensors cannot be verified: {exc}")

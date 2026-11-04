@@ -634,6 +634,62 @@ def test_half_precision_cpu_tensors_round_trip(tmp_path: Path) -> None:
         assert verified["derived_tensors"][0]["dtype"] == str(dtype)
 
 
+def test_tensor_hash_matches_storage_bytes_without_per_byte_python(tmp_path: Path) -> None:
+    import torch
+
+    for dtype in (torch.float32, torch.float16, torch.bfloat16):
+        value = torch.tensor([1.0, -2.0, 3.5, 0.0], dtype=dtype)
+        transposed = value.reshape(2, 2).t()
+        assert not transposed.is_contiguous()
+        canonical = transposed.contiguous()
+        reference = hashlib.sha256(bytes(canonical.untyped_storage())).hexdigest()
+        original = hashlib.sha256(bytes(value.contiguous().untyped_storage())).hexdigest()
+        assert conversion.tensor_values_sha256(value) == original
+        assert conversion.tensor_values_sha256(transposed) == reference
+        assert conversion.tensor_values_sha256(canonical) == reference
+        assert original != reference
+        empty = torch.empty(0, dtype=dtype)
+        assert conversion.tensor_values_sha256(empty) == hashlib.sha256(b"").hexdigest()
+    source = (ROOT / "scripts" / "cesvima" / "uie_safetensors_conversion.py").read_text(encoding="utf-8")
+    assert "payload = bytes(" not in source
+
+
+def test_conversion_stages_are_flushed_in_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import torch
+
+    scratch, runs, _models = _conversion_runtime(tmp_path, monkeypatch, "1353021")
+    origin_dir = _origin_dir(scratch)
+    weight = torch.tensor([1.0, 2.0], dtype=torch.float32)
+    torch.save({"shared.weight": weight, "lm_head.weight": weight}, origin_dir / "pytorch_model.bin")
+    _point_at_origin(runs, origin_dir)
+    monkeypatch.setenv(conversion.CONVERT_ENV, "1")
+    monkeypatch.setattr(conversion, "origin_identity_matches", lambda _size, _digest: True)
+    assert conversion.main() == 0
+    text = capsys.readouterr().out
+    stages = (
+        "STAGE pin",
+        "STAGE partial",
+        "STAGE companions",
+        "STAGE load",
+        "STAGE aliases",
+        "STAGE clone",
+        "STAGE hash",
+        "STAGE safetensors_write",
+        "STAGE reload_equivalence",
+        "STAGE origin_rehash",
+        "STAGE recheck_tensors",
+        "STAGE publish_directory",
+        "STAGE accepted",
+    )
+    positions = [text.index(stage) for stage in stages]
+    assert positions == sorted(positions)
+    assert "bytes=" in text
+
+
 def test_load_origin_bin_repeats_authorization_and_refuses_cuda(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
