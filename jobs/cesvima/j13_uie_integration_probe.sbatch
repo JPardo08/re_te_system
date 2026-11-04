@@ -24,7 +24,7 @@ unset UIE_SAFETENSORS_CONVERT_AUTHORIZED
 cesvima_guard
 cesvima_prepare_runtime_dirs
 cd "${P3_SLURM_LOG_DIR}"
-export PYTHONPATH="${SYSTEM_ROOT}/scripts/cesvima${PYTHONPATH:+:${PYTHONPATH}}"
+export PYTHONPATH="${P3_UPSTREAM_ROOT}/UIE:${SYSTEM_ROOT}/scripts/cesvima${PYTHONPATH:+:${PYTHONPATH}}"
 export PYTHONHASHSEED=0
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1

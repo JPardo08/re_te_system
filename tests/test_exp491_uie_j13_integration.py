@@ -205,6 +205,11 @@ def test_accepted_probe_accounting_and_launch_boundaries() -> None:
     assert "source /home/y064/PROJECT/y064644/paper3/re_te_system/scripts/cesvima/env.sh" in sbatch
     assert "--account" not in sbatch
     assert "--mail-user" not in sbatch
+    pythonpath = 'export PYTHONPATH="${P3_UPSTREAM_ROOT}/UIE:${SYSTEM_ROOT}/scripts/cesvima${PYTHONPATH:+:${PYTHONPATH}}"'
+    assert pythonpath in sbatch
+    assert sbatch.index("source /home/y064/PROJECT/y064644/paper3/re_te_system/scripts/cesvima/env.sh") < sbatch.index(pythonpath)
+    for preserved in ("export PYTHONHASHSEED=0", "export HF_HUB_OFFLINE=1", "export TRANSFORMERS_OFFLINE=1"):
+        assert preserved in sbatch
     runs = ROOT / "not-created"
     with pytest.raises(SystemExit):
         integration.assert_output_not_protected(runs, runs / "uie" / "train" / "seed1-10shot")
