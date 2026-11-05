@@ -1642,7 +1642,7 @@
       ],
       "acceptance_criteria": [
         "the report names google/gemma-4-12B-it and refuses google/gemma-4-12B",
-        "ready_for_gpu_reservation stays false while the isolated Gemma4 runtime is absent or the revision is unapproved"
+        "ready_for_gpu_reservation is true only for an isolated runtime that imports Gemma4UnifiedForConditionalGeneration on Transformers >=5.10.1; that pass does not approve the revision, channels, EOS/PAD, VRAM, or G01-G04"
       ],
       "preparation_status": "AWAITING_AUTHORIZATION",
       "authorization": "not_authorized",

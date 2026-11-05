@@ -31,8 +31,15 @@ def main(argv: list[str] | None = None) -> int:
     report["manifest"] = technical_manifest(report)
     write_json(args.output, report)
     if report["ready_for_gpu_reservation"] is not True:
-        fail("G00 is not ready to reserve a GPU: " + "; ".join(report["blockers"]), code=2)
-    print("PASS G00", flush=True)
+        fail(
+            "G00 runtime is not compatible: " + "; ".join(report["runtime_blockers"]),
+            code=2,
+        )
+    if report["scientific_ready"] is not False or report["candidate_revision_approved"] is not False:
+        fail("G00 cannot certify scientific readiness")
+    if report["authorizes_later_stages"] != {"G01": False, "G02": False, "G03": False, "G04": False}:
+        fail("G00 must not authorize a later stage")
+    print("PASS G00 runtime-compatibility-only", flush=True)
     return 0
 
 

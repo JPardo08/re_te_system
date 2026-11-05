@@ -356,9 +356,11 @@ def readiness_report() -> dict[str, Any]:
         "minimum_transformers": ".".join(str(part) for part in MINIMUM_TRANSFORMERS),
         "model_id": MODEL_ID,
         "pad_token_id": None,
+        "authorizes_later_stages": {"G01": False, "G02": False, "G03": False, "G04": False},
         "ready_for_gpu_reservation": False,
         "required_architecture": ARCHITECTURE,
         "result_role": RESULT_ROLE,
+        "scientific_ready": False,
         "serialization_id": SERIALIZATION_ID,
         "stage": "G00",
         "vram_bytes_measured": None,
@@ -368,8 +370,12 @@ def readiness_report() -> dict[str, Any]:
             "status": "estimate_not_measurement",
         },
     }
-    report["blockers"] = _readiness_blockers(report)
-    report["ready_for_gpu_reservation"] = report["blockers"] == []
+    report["runtime_blockers"] = _runtime_blockers(report)
+    report["scientific_blockers"] = _scientific_blockers(report)
+    report["blockers"] = list(report["runtime_blockers"])
+    report["ready_for_gpu_reservation"] = report["runtime_blockers"] == []
+    report["scientific_ready"] = report["scientific_blockers"] == []
+    report["authorizes_later_stages"] = {"G01": False, "G02": False, "G03": False, "G04": False}
     return report
 
 
@@ -664,21 +670,33 @@ def _probe_isolated_runtime(python_path: Path | None) -> dict[str, Any]:
     }
 
 
-def _readiness_blockers(report: Mapping[str, Any]) -> list[str]:
-    blockers = [
-        "candidate_revision_not_approved",
-        "channel_separator_unverified",
-        "chat_template_not_verified_against_candidate",
-        "eos_pad_ids_unverified",
-        "vram_unverified",
-    ]
-    installed = report["installed_transformers"]
+def _runtime_blockers(report: Mapping[str, Any]) -> list[str]:
+    """CPU compatibility of GEMMA_VENV. Scientific gaps are not in this list."""
     isolated = report["isolated_runtime"]
-    if installed.get("status") != "observed" or installed.get("compatible") is not True:
-        if isolated.get("compatible") is not True:
-            blockers.append("gemma4_unified_runtime_not_available")
     if isolated.get("status") == "venv_absent":
-        blockers.append("gemma_venv_absent")
+        return ["gemma_venv_absent"]
+    if isolated.get("compatible") is True:
+        return []
+    if isolated.get("status") == "probed" and isolated.get("class_importable") is not True:
+        return ["gemma4_unified_class_not_importable"]
+    if isolated.get("status") == "probed":
+        return ["isolated_transformers_incompatible"]
+    return ["gemma4_unified_runtime_not_available"]
+
+
+def _scientific_blockers(report: Mapping[str, Any]) -> list[str]:
+    """Facts G00 cannot establish. They do not decide ready_for_gpu_reservation."""
+    blockers: list[str] = []
+    if report.get("candidate_revision_approved") is not True:
+        blockers.append("candidate_revision_not_approved")
+    if report.get("chat_template_verified_against_candidate") is not True:
+        blockers.append("chat_template_not_verified_against_candidate")
+    if report.get("channel_separator_verified") is not True:
+        blockers.append("channel_separator_unverified")
+    if report.get("eos_token_id") is None or report.get("pad_token_id") is None:
+        blockers.append("eos_pad_ids_unverified")
+    if report.get("vram_bytes_measured") is None:
+        blockers.append("vram_unverified")
     return blockers
 
 

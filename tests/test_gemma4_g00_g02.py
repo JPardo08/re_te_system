@@ -331,6 +331,82 @@ def test_preflight_loader_is_not_called_without_approval(tmp_path: Path = None) 
     assert loaded["weights_loaded"] is True
 
 
+def _fake_gemma_venv(directory: Path, *, version: str | None, status: int) -> Path:
+    python = directory / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    if version is None:
+        python.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    else:
+        python.write_text(f"#!/bin/sh\nprintf '%s\\n' '{version}'\nexit {status}\n", encoding="utf-8")
+    python.chmod(0o755)
+    return directory
+
+
+def test_g00_separates_runtime_compatibility_from_scientific_gaps(tmp_path: Path = None) -> None:
+    if tmp_path is None:
+        raise AssertionError("tmp_path missing")
+    saved = os.environ.get("GEMMA_VENV")
+    os.environ.pop("GEMMA_VENV", None)
+    try:
+        absent = readiness_report()
+        assert absent["ready_for_gpu_reservation"] is False
+        assert absent["runtime_blockers"] == ["gemma_venv_absent"]
+        assert "candidate_revision_not_approved" in absent["scientific_blockers"]
+
+        os.environ["GEMMA_VENV"] = str(_fake_gemma_venv(tmp_path / "old", version="4.57.6", status=0))
+        old = readiness_report()
+        assert old["ready_for_gpu_reservation"] is False
+        assert old["runtime_blockers"] == ["isolated_transformers_incompatible"]
+
+        os.environ["GEMMA_VENV"] = str(_fake_gemma_venv(tmp_path / "missing-class", version=None, status=1))
+        missing = readiness_report()
+        assert missing["ready_for_gpu_reservation"] is False
+        assert missing["runtime_blockers"] == ["gemma4_unified_class_not_importable"]
+
+        os.environ["GEMMA_VENV"] = str(_fake_gemma_venv(tmp_path / "compatible", version="5.10.1", status=0))
+        compatible = readiness_report()
+        assert compatible["ready_for_gpu_reservation"] is True
+        assert compatible["runtime_blockers"] == []
+        assert compatible["scientific_ready"] is False
+        assert compatible["candidate_revision_approved"] is False
+        assert compatible["eos_token_id"] is None and compatible["pad_token_id"] is None
+        assert compatible["vram_bytes_measured"] is None
+        assert "vram_unverified" in compatible["scientific_blockers"]
+        assert "eos_pad_ids_unverified" in compatible["scientific_blockers"]
+        assert compatible["authorizes_later_stages"] == {
+            "G01": False,
+            "G02": False,
+            "G03": False,
+            "G04": False,
+        }
+        from re_te_system.controlled_experiment.gemma4 import acquisition_plan, launch_g04
+
+        assert acquisition_plan(MODEL_ID, CANDIDATE_REVISION)["acquire_permitted"] is False
+        try:
+            launch_g04({})
+        except Exception as exc:
+            assert "g04_phase_lock_closed" in str(exc)
+        else:
+            raise AssertionError("compatible G00 opened G04")
+        sys.path.insert(0, str(SCRIPTS))
+        import g00_gemma_readiness
+
+        os.environ["SCRATCH_ROOT"] = str(tmp_path)
+        os.environ["GEMMA_G00_READINESS_AUTHORIZED"] = "1"
+        exit_code = g00_gemma_readiness.main(["--output", str(tmp_path / "compatible.json")])
+        assert exit_code == 0
+        written = json.loads((tmp_path / "compatible.json").read_text(encoding="utf-8"))
+        assert written["ready_for_gpu_reservation"] is True
+        assert written["scientific_ready"] is False
+        assert written["authorizes_later_stages"]["G04"] is False
+        os.environ.pop("GEMMA_G00_READINESS_AUTHORIZED", None)
+    finally:
+        if saved is None:
+            os.environ.pop("GEMMA_VENV", None)
+        else:
+            os.environ["GEMMA_VENV"] = saved
+
+
 def test_commands_and_registry_stay_closed() -> None:
     sys.path.insert(0, str(SCRIPTS))
     import g00_gemma_readiness
@@ -367,6 +443,7 @@ def test_cli_refuses_gold_and_candidate_download(tmp_path: Path = None) -> None:
     import g02_gemma_preflight
 
     os.environ["SCRATCH_ROOT"] = str(tmp_path)
+    os.environ.pop("GEMMA_VENV", None)
     os.environ["GEMMA_G00_READINESS_AUTHORIZED"] = "1"
     try:
         try:
@@ -441,6 +518,7 @@ def _run_all() -> None:
             (root / name).mkdir()
         test_publish_is_refused_twice_and_bins_are_not_loadable(root / "publish")
         test_preflight_loader_is_not_called_without_approval(root / "preflight")
+        test_g00_separates_runtime_compatibility_from_scientific_gaps(root / "g00")
         test_cli_refuses_gold_and_candidate_download(root / "cli")
 
 
