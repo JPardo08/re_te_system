@@ -24,6 +24,10 @@ export GOLLIE_VENV="${SCRATCH_ROOT}/venvs/gollie-l40s"
 export P3_RUNS_ROOT="${SCRATCH_ROOT}/runs/p3"
 export P3_SLURM_LOG_DIR="${P3_RUNS_ROOT}/slurm"
 export P3_MODELS_ROOT="${SCRATCH_ROOT}/models"
+# Gemma 4 12B IT does not fit the Transformers 4.57.6 inference venv.
+# GEMMA_VENV is created on CESVIMA; this file only names it.
+export GEMMA_VENV="${SCRATCH_ROOT}/venvs/gemma-isolated"
+export GEMMA_MODEL_DIR="${P3_MODELS_ROOT}/gemma4-12b-it"
 export P3_UPSTREAM_ROOT="${SCRATCH_ROOT}/upstreams"
 
 # Documented Magerit partitions and typed GRES.

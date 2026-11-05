@@ -111,7 +111,7 @@ def test_shipped_catalog_is_structurally_valid_and_not_ready() -> None:
     assert report["executed_external_commands"] == []
     assert report["counts"]["prepared"] == 0
     assert report["counts"]["tasks"] == report["counts"]["structurally_valid_tasks"]
-    assert report["counts"]["by_program"] == {"SOTA": 23, "CONDITIONING": 18}
+    assert report["counts"]["by_program"] == {"SOTA": 28, "CONDITIONING": 25}
     assert report["submit_all_is_not_authorization"] is True
     assert report["comparison_groups"] == []
     assert "J06" in report["blocked_tasks"]
@@ -153,6 +153,65 @@ def test_dag_matches_versioned_submitter() -> None:
     assert training == ["J13"]
     assert by_id["J13"]["dataset_id"] == "conll04_uie"
     assert by_id["J00"]["executor"]["path"] == "jobs/cesvima/j00_verify_infer_env.sbatch"
+    assert by_id["J12"]["dependencies"] == ["J09", "J11"]
+    assert by_id["J13"]["dependencies"] == ["J12"]
+    assert by_id["J15"]["dependencies"] == []
+    assert by_id["J16"]["dependencies"] == ["J15"]
+    assert by_id["J17"]["dependencies"] == ["J16"]
+    assert by_id["J15"]["executor"]["path"] == "jobs/cesvima/j15_gollie_preflight.sbatch"
+    assert by_id["J13"]["execution_permitted"] is False
+    assert by_id["J13"]["authorization"] == "not_authorized"
+
+
+def test_auxiliary_jobs_are_visible_and_not_executable() -> None:
+    report = validate_catalog(CATALOG)
+    assert report["errors"] == []
+    submitted: set[str] = set()
+    for line in SUBMITTER.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("submit_job "):
+            submitted.add(stripped.split()[1])
+    plans = [
+        json.loads((CATALOG / "plans" / "sota.json").read_text(encoding="utf-8")),
+        json.loads((CATALOG / "plans" / "conditioning.json").read_text(encoding="utf-8")),
+    ]
+    tasks = {task["id"]: task for plan in plans for task in plan["tasks"]}
+    auxiliary = {
+        "UIE-CONVERT": "jobs/cesvima/uie_safetensors_convert.sbatch",
+        "UIE-J13-GPU-PROBE": "jobs/cesvima/j13_uie_gpu_probe.sbatch",
+        "UIE-J13-INTEGRATION-PROBE": "jobs/cesvima/j13_uie_integration_probe.sbatch",
+        "J15-ISOLATED": "jobs/cesvima/j15_gollie_isolated_preflight.sbatch",
+        "GOLLIE-CONVERT": "jobs/cesvima/gollie_safetensors_convert.sbatch",
+        "J21": "jobs/cesvima/j21_qwen3_invented_smoke.sbatch",
+    }
+    assert set(auxiliary).isdisjoint(submitted)
+    for task_id, path in auxiliary.items():
+        task = tasks[task_id]
+        assert task["executor"] == {"kind": "existing_sbatch", "path": path, "invoked_by": None}
+        assert task["dependencies"] == []
+        assert task["included_in_submit_all"] is False
+        assert task["execution_permitted"] is False
+        assert task["authorization"] == "not_authorized"
+        assert task["training"] is False
+        assert task["evaluation"] is None
+        assert task["preparation_status"] != "VALIDATED"
+        assert (ROOT / path).is_file()
+    assert tasks["J21"]["preparation_status"] == "BLOCKED"
+    assert tasks["J21"]["condition"] is None
+    assert tasks["J21"]["dataset_id"] is None
+    assert "J21" in report["blocked_tasks"]
+    assert tasks["J13"]["dependencies"] == ["J12"]
+    assert "UIE-J13-INTEGRATION-PROBE" not in tasks["J13"]["dependencies"]
+    systems = json.loads((CATALOG / "catalog" / "systems.json").read_text(encoding="utf-8"))
+    qwen = next(item for item in systems["systems"] if item["id"] == "qwen3_4b_instruct_2507")
+    assert qwen["checkpoint_identity"] == {"kind": "unresolved", "value": None}
+    assert qwen["executable"] is False
+    policy = json.loads((CATALOG / "plans" / "conditioning.json").read_text(encoding="utf-8"))
+    assert policy["condition_policy"]["C2"]["readiness"] == "PARTIAL"
+    assert policy["condition_policy"]["C3"]["readiness"] == "NOT_READY"
+    assert policy["condition_policy"]["C3"]["reason"] == "NOT_EXECUTABLE"
+    assert policy["condition_policy"]["C3-NL"]["authorizes"] == []
+    assert all(task["execution_permitted"] is False for task in tasks.values())
 
 
 def test_shell_hashes_match_benchmark_without_storing_the_instruction() -> None:

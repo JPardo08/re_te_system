@@ -6,7 +6,10 @@
   "notes": [
     "submit --all is not an authorization to run every task.",
     "J13 is the only training task and uses CoNLL04, not Hohfeld Gold.",
-    "A result that exists only on SCRATCH is not publishable."
+    "A result that exists only on SCRATCH is not publishable.",
+    "preparation_status is plan readiness, not a SLURM ledger. EXP.4.10.1 did not read SCRATCH reports and does not store scheduler JOBIDs as verified artifact evidence. COMPLETED is not VALIDATED.",
+    "J15 remains the preflight submitted by submit_train_first.sh. J15-ISOLATED coexists and is not selected. Switching the submitted file is deferred.",
+    "UIE-CONVERT, UIE-J13-GPU-PROBE and UIE-J13-INTEGRATION-PROBE are outside the J12-J13 edges. An integration probe does not authorize J13."
   ],
   "tasks": [
     {
@@ -757,7 +760,8 @@
       "gates": [
         "fingerprint must match J12",
         "output directory must be empty",
-        "Hohfeld Gold and Silver are not training data"
+        "Hohfeld Gold and Silver are not training data",
+        "UIE-J13-INTEGRATION-PROBE is not a dependency and does not authorize this task"
       ],
       "acceptance_criteria": [
         "training manifest records base provenance separately from the new weights"
@@ -855,7 +859,7 @@
       "split": null,
       "condition": null,
       "protocol_id": null,
-      "summary": "L40S preflight without downloading the 7B weights.",
+      "summary": "Historical L40S preflight without downloading the 7B weights. submit_train_first.sh still selects this file. J15-ISOLATED is a separate task and is not substituted here.",
       "inputs": [
         "gollie-l40s environment"
       ],
@@ -961,7 +965,7 @@
       "split": "official_re",
       "condition": null,
       "protocol_id": "SOTA_NATIVE",
-      "summary": "Native GoLLIE smoke on the official English fixture. Local adapter status remains BLOCKED_GPU until this job passes.",
+      "summary": "Native GoLLIE smoke on the official English fixture. The adapter constant remains BLOCKED_GPU. A scheduler completion does not clear it, does not validate an unread SCRATCH report, and does not finish the campaign.",
       "inputs": [
         "tests/fixtures/gollie/official_re_*"
       ],
@@ -1279,6 +1283,278 @@
       "output_budget_frozen": false,
       "requires_channel_separator": false,
       "id": "PYTHIA"
+    },
+    {
+      "program": "SOTA",
+      "system_id": "uie",
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "CPU conversion of the pinned UIE pytorch_model.bin to Safetensors. Defined and outside submit_train_first.sh. Not a training run.",
+      "inputs": [
+        "pinned UIE pytorch_model.bin"
+      ],
+      "outputs": [
+        "derived model.safetensors outside the source cache"
+      ],
+      "dependencies": [],
+      "resource_profile_id": "cpu-acquire",
+      "resources": {
+        "process_ram": "32G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/uie_safetensors_convert.sbatch",
+        "invoked_by": null
+      },
+      "gates": [
+        "not selected by submit_train_first.sh",
+        "refuse uie-train as the conversion interpreter",
+        "do not deserialize with an unsafe pickle path"
+      ],
+      "acceptance_criteria": [
+        "conversion report is not accepted from a scheduler COMPLETED state",
+        "SCRATCH report contents were not read for this registry update"
+      ],
+      "preparation_status": "AWAITING_AUTHORIZATION",
+      "authorization": "not_authorized",
+      "technical_block": false,
+      "block_reasons": [],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": false,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "UIE-CONVERT"
+    },
+    {
+      "program": "SOTA",
+      "system_id": "uie",
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "Bounded GPU memory probe for one UIE batch. Separate from J13 training and not an edge of the versioned DAG.",
+      "inputs": [
+        "derived UIE Safetensors"
+      ],
+      "outputs": [
+        "probe report for one random-token forward and backward"
+      ],
+      "dependencies": [],
+      "resource_profile_id": "v100-infer",
+      "resources": {
+        "process_ram": "32G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/j13_uie_gpu_probe.sbatch",
+        "invoked_by": null
+      },
+      "gates": [
+        "not selected by submit_train_first.sh",
+        "does not run the 200-epoch trainer",
+        "does not authorize J13"
+      ],
+      "acceptance_criteria": [
+        "a scheduler COMPLETED state is not PROBE_PASS",
+        "SCRATCH report contents were not read for this registry update"
+      ],
+      "preparation_status": "AWAITING_AUTHORIZATION",
+      "authorization": "not_authorized",
+      "technical_block": false,
+      "block_reasons": [],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": false,
+      "requires_tokenizer": false,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "UIE-J13-GPU-PROBE"
+    },
+    {
+      "program": "SOTA",
+      "system_id": "uie",
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "Bounded UIE integration probe. It is not J13 and its result cannot authorize the 200-epoch run.",
+      "inputs": [
+        "derived UIE Safetensors",
+        "frozen trainer argv"
+      ],
+      "outputs": [
+        "integration report that leaves J13 unauthorized"
+      ],
+      "dependencies": [],
+      "resource_profile_id": "v100-infer",
+      "resources": {
+        "process_ram": "32G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/j13_uie_integration_probe.sbatch",
+        "invoked_by": null
+      },
+      "gates": [
+        "not selected by submit_train_first.sh",
+        "authorizes_j13 stays false",
+        "scientific hyperparameters stay unchanged"
+      ],
+      "acceptance_criteria": [
+        "INTEGRATION_PASS would still leave J13 unauthorized",
+        "a scheduler COMPLETED state is not artifact validation",
+        "SCRATCH report contents were not read for this registry update"
+      ],
+      "preparation_status": "AWAITING_AUTHORIZATION",
+      "authorization": "not_authorized",
+      "technical_block": false,
+      "block_reasons": [],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": false,
+      "requires_tokenizer": false,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "UIE-J13-INTEGRATION-PROBE"
+    },
+    {
+      "program": "SOTA",
+      "system_id": "gollie",
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "Isolated L40S GoLLIE preflight. Coexists with J15 and is not the file submit_train_first.sh submits.",
+      "inputs": [
+        "gollie-isolated environment"
+      ],
+      "outputs": [
+        "isolated preflight report"
+      ],
+      "dependencies": [],
+      "resource_profile_id": "l40s-infer",
+      "resources": {
+        "process_ram": "64G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/j15_gollie_isolated_preflight.sbatch",
+        "invoked_by": null
+      },
+      "gates": [
+        "not selected by submit_train_first.sh",
+        "does not authorize J16 or J17",
+        "does not replace the historical J15 executor"
+      ],
+      "acceptance_criteria": [
+        "a scheduler COMPLETED state does not retarget the submitter",
+        "SCRATCH report contents were not read for this registry update"
+      ],
+      "preparation_status": "AWAITING_AUTHORIZATION",
+      "authorization": "not_authorized",
+      "technical_block": false,
+      "block_reasons": [],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": false,
+      "requires_tokenizer": false,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "J15-ISOLATED"
+    },
+    {
+      "program": "SOTA",
+      "system_id": "gollie",
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "CPU Safetensors conversion of the indexed GoLLIE shards. Outside the J15-J16-J17 submitter edges.",
+      "inputs": [
+        "HiTZ/GoLLIE-7B indexed pytorch shards"
+      ],
+      "outputs": [
+        "derived GoLLIE Safetensors"
+      ],
+      "dependencies": [],
+      "resource_profile_id": "cpu-acquire",
+      "resources": {
+        "process_ram": "64G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/gollie_safetensors_convert.sbatch",
+        "invoked_by": null
+      },
+      "gates": [
+        "not selected by submit_train_first.sh",
+        "do not convert with gollie-isolated or gollie-l40s",
+        "does not by itself authorize J17"
+      ],
+      "acceptance_criteria": [
+        "a scheduler COMPLETED state is not CONVERSION_PASS",
+        "SCRATCH report contents were not read for this registry update"
+      ],
+      "preparation_status": "AWAITING_AUTHORIZATION",
+      "authorization": "not_authorized",
+      "technical_block": false,
+      "block_reasons": [],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": false,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "GOLLIE-CONVERT"
     }
   ]
 }

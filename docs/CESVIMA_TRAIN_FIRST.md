@@ -252,10 +252,40 @@ No se ha documentado una cuenta SLURM ni un mail para este usuario. Los jobs no 
 
 ## Frontera con C0/C1
 
-C0 y C1 no estan en este DAG. Siguen sin backbone comun controlado, sin prompt comun, sin gramatica de salida, sin payload de ejecucion C0 distinto de `documents.jsonl`, y sin payload ni extractor C1. Las etiquetas C1 existen en `re_te_benchmark/schemas/c1/hohfeld_labels.json` (`Duty`, `Right`, `Privilege`, `NoRight`) y no se usan aqui. `CONDITIONING_SPEC` congela metadatos, no prompts. C2 sigue parcial y C3 no esta listo. Esta capa no los implementa.
+C0 y C1 no estan en el DAG de `submit_train_first.sh`. El shell comun versionado es `common-instruction-shell-v2`, definido en `re_te_benchmark.conditioning.shell` y consumido por el harness de experimento controlado. Los slots C0 y C1 tienen payload: C0 esta vacio y C1 contiene el texto corto de etiquetas. Preparar ese payload no autoriza la ejecucion. J21 es un smoke de textos inventados en un arbol aislado; un pase tecnico de ese smoke no habilita inferencia sobre Gold ni sobre los 36 documentos. La revision observada de Qwen3 no queda pineada por el registro. C2 continua `PARTIAL`. C3 continua `NOT_READY` y `NOT_EXECUTABLE`. C3-NL sigue siendo una variante separada y no autoriza C3.
+
+## Componentes auxiliares ya versionados
+
+El DAG principal no cambia. `submit_train_first.sh --gollie` sigue enviando `jobs/cesvima/j15_gollie_preflight.sbatch`, despues J16 y J17. El J15 aislado, `jobs/cesvima/j15_gollie_isolated_preflight.sbatch`, coexiste y no sustituye ese envio. Cambiar el fichero que el submitter enviaria queda fuera de esta reconciliacion y necesita su propia validacion.
+
+Tambien estan versionados, y fuera de `--all`:
+
+- `jobs/cesvima/uie_safetensors_convert.sbatch`
+- `jobs/cesvima/j13_uie_gpu_probe.sbatch`
+- `jobs/cesvima/j13_uie_integration_probe.sbatch`
+- `jobs/cesvima/gollie_safetensors_convert.sbatch`
+- `jobs/cesvima/j21_qwen3_invented_smoke.sbatch`
+
+La conversion, el preflight J12, el microprobe GPU y el probe de integracion de UIE son componentes distintos. J13 sigue sin autorizacion. J14 sigue a la espera de J13. Los hiperparametros de las 200 epocas no cambian. El entrenamiento exige el derivado Safetensors y rechaza `pytorch_model.bin`. Una prueba de integracion no es el entrenamiento cientifico. Exigir su informe como dependencia positiva de J13 queda para una iteracion posterior, despues de leer el JSON del job.
+
+Una consulta de contabilidad SLURM del 05/11/2026 observo `COMPLETED 0:0` en J21 `1349043`, GoLLIE J15 `1351016`, J16 `1351274`, J17 `1351511`, conversion UIE `1363171`, J12 `1363190`, probe GPU `1363874` e integracion `1364903`. J09 `1348833` figura como `FAILED 1:0` y una recuperacion posterior `1349096` como `COMPLETED 0:0`. Esos estados no se han vuelto a contrastar con los informes de SCRATCH en esta reconciliacion. `COMPLETED` no es un PASS cientifico ni `VALIDATED` del registro. El resultado historico de J17 no cierra la campana GoLLIE.
+
+## Gemma 4 G00-G02
+
+`google/gemma-4-12B-it` es el backbone instruction-tuned. `google/gemma-4-12B` queda rechazado. La revision `707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7` sigue siendo candidata: aparecer en el catalogo no la aprueba. El runtime de inferencia pineado a Transformers 4.57.6 no tiene `Gemma4UnifiedForConditionalGeneration`. El venv aislado es `GEMMA_VENV`, bajo `SCRATCH_ROOT/venvs/gemma-isolated`, y no se crea en esta iteracion. La documentacion publicada de Transformers situa esa clase en 5.10.1. No se reutiliza `uie-train` para cargarla.
+
+G00, G01 y G02 tienen sbatch propio y no entran en `submit_train_first.sh`. G00 es CPU y no descarga. G01 solo puede adquirir una revision aprobada; hoy el conjunto aprobado esta vacio y no sobrescribe un snapshot aceptado. G02 pide `gpu:l40s:1`, carga solo en local y, si llega a ejecutarse, usa una frase inventada. No se ejecuta aqui. El tamano bf16 de 11.95B parametros es una estimacion de 23900000000 bytes, no una medicion de VRAM. C0, C1 y el shell v2 no cambian.
+
+## Gemma 4 G03-G05
+
+G03 prepara el smoke pareado C0/C1 sobre dos frases inventadas, con una sola carga de pesos cuando el runtime lo permita. El PASS es tecnico: no autoriza G04 ni es un F1. Los artefactos son `manifest.json`, `predictions.jsonl`, `failures.jsonl` y `statistics.json`, mas el desglose por condicion que ya usa el puente de evaluacion.
+
+G04 nombra la cohorte de 36 documentos de `teresia_hohfeld` sin abrirla. Rechaza anotaciones, exige revision aprobada, snapshot, runtime, preflight G02, smoke G03, decodificacion congelada e identica, autorizacion humana y directorio seguro. Una variable de entorno no sustituye esas comprobaciones. El phase lock sigue cerrado, asi que el sbatch es de CPU y no reserva GPU. No se lanza Gold.
+
+G05 llama a `evaluate_predicates` y `evaluate_triplets` de P0, con `strict_inline` y `exact_multiset_v1`. Los tres estimandos siguen siendo `conservative_operational_f1`, `f1_conditional_on_completed_generation` y `paired_secondary_f1`. El contraste C1-C0 no se publica. El sbatch rechaza una ruta Hohfeld.
 
 ## Checkpoint operativo 2026-10-26
 
 Lo observado el 26 de octubre, con jobs, la recuperacion de bytes UIE tras el fallo de J09 `1348833` y el smoke tecnico Qwen3, esta en `docs/CESVIMA_CHECKPOINT_2026-10-26.md`. Ese fichero no se reescribe. Los gates de este documento son el contrato vigente e incorporan la recuperacion EXP.4.5. J13, J16, J17 y Gold C0/C1 siguen sin autorizar. J21 no entra en `submit_train_first.sh`.
 
-La recuperacion local posterior a ese checkpoint, con el pin del `.bin`, la extension FlashAttention anterior al wheel corregido y el procedimiento de sincronizacion que no se ejecuta desde aqui, esta en `docs/CESVIMA_EXP45_RECOVERY.md`. EXP.4.5.1 dejo escritas las fases de UIE; sus constantes siguen inactivas. EXP.4.6 anade el convertidor CPU y la lectura J12 del derivado, ambos cerrados salvo variable de entorno. J12, si llega a autorizarse, mide de nuevo los tensores del Safetensors y los acompanantes; no abre el pickle. No convierte el checkpoint real. La cuota individual de BeeGFS sigue sin una medicion verificada: el espacio global observado de 67 TB no es esa cuota. El trainer, el tokenizer de entrenamiento y `resize_token_embeddings` siguen sin ejecutarse sobre el derivado. El job `1363874` cargo el derivado para forward y backward con tokens aleatorios y no ejecuto `optimizer.step`. La validacion `j13_uie_integration_probe.sbatch` es la que debe medir el paso completo, la evaluacion y el guardado; no se ha enviado desde este checkout y no autoriza J13. Ese procedimiento no autoriza J13, J16, J17 ni Gold C0/C1.
+La recuperacion local posterior a ese checkpoint, con el pin del `.bin`, la extension FlashAttention anterior al wheel corregido y el procedimiento de sincronizacion que no se ejecuta desde aqui, esta en `docs/CESVIMA_EXP45_RECOVERY.md`. EXP.4.5.1 dejo escritas las fases de UIE; sus constantes siguen inactivas. EXP.4.6 anade el convertidor CPU y la lectura J12 del derivado, ambos cerrados salvo variable de entorno. J12, si llega a autorizarse, mide de nuevo los tensores del Safetensors y los acompanantes; no abre el pickle. No convierte el checkpoint real. La cuota individual de BeeGFS sigue sin una medicion verificada: el espacio global observado de 67 TB no es esa cuota. El trainer, el tokenizer de entrenamiento y `resize_token_embeddings` siguen sin ejecutarse sobre el derivado. El job `1363874` cargo el derivado para forward y backward con tokens aleatorios y no ejecuto `optimizer.step`. La validacion `j13_uie_integration_probe.sbatch` es la que debe medir el paso completo, la evaluacion y el guardado. La contabilidad del 05/11 observa un job de integracion completado; este checkout no ha leido su JSON y ese resultado no autoriza J13. Ese procedimiento tampoco autoriza J16, J17 ni Gold C0/C1.

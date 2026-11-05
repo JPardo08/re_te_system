@@ -60,9 +60,10 @@
     }
   },
   "notes": [
-    "CESVIMA_TRAIN_FIRST.md still says C0 and C1 have no common prompt. Shell v2 and harness exp3b1-1 exist at the same system commit.",
+    "common-instruction-shell-v2 is implemented in re_te_benchmark and consumed by the controlled-experiment harness. C0 and C1 payloads exist. Preparing them does not authorize execution, and the J21 invented-text smoke does not authorize Gold inference.",
     "Neither backbone is selected by being listed here.",
-    "C2 stays PARTIAL. C3 stays NOT_READY and NOT_EXECUTABLE. C3-NL does not authorize C3."
+    "C2 stays PARTIAL. C3 stays NOT_READY and NOT_EXECUTABLE. C3-NL does not authorize C3.",
+    "G00-G02 name the Gemma 4 12B IT technical jobs. The catalog revision is a candidate, not an approved pin. They are outside submit_train_first.sh and do not authorize Gold."
   ],
   "tasks": [
     {
@@ -1541,6 +1542,440 @@
       "output_budget_frozen": false,
       "requires_channel_separator": true,
       "id": "GEMMA-EVAL"
+    },
+    {
+      "program": "CONDITIONING",
+      "system_id": "qwen3_4b_instruct_2507",
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "Defined invented-text Qwen3 smoke on an isolated tree. It is not a C0 or C1 Gold arm and does not pin the checkpoint.",
+      "inputs": [
+        "isolated J21 tree",
+        "invented sentences"
+      ],
+      "outputs": [
+        "invented-text smoke report, not a Gold prediction file"
+      ],
+      "dependencies": [],
+      "resource_profile_id": "l40s-infer",
+      "resources": {
+        "process_ram": "64G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/j21_qwen3_invented_smoke.sbatch",
+        "invoked_by": null
+      },
+      "gates": [
+        "not selected by submit_train_first.sh",
+        "Gold inference stays refused",
+        "the observed revision is not recorded as a scientific pin"
+      ],
+      "acceptance_criteria": [
+        "the task stays blocked while the checkpoint revision is unpinned",
+        "an invented-text technical pass does not authorize the 36-document run",
+        "a scheduler COMPLETED state is not acceptance and SCRATCH reports were not read"
+      ],
+      "preparation_status": "BLOCKED",
+      "authorization": "not_authorized",
+      "technical_block": true,
+      "block_reasons": [
+        {
+          "code": "checkpoint_identity_unresolved",
+          "evidence": "Qwen/Qwen3-4B-Instruct-2507 still has no pinned 40-character revision. Scheduler accounting for the invented-text smoke was not re-read from SCRATCH."
+        },
+        {
+          "code": "gold_inference_closed",
+          "evidence": "The versioned J21 entrypoint refuses C0/C1 Gold inference. Payload preparation does not open it."
+        }
+      ],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": true,
+      "requires_tokenizer": true,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "J21"
+    },
+    {
+      "program": "CONDITIONING",
+      "system_id": "gemma4_12b_it",
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "G00 checks the instruction-tuned Gemma identity and isolated runtime before any GPU reservation. The catalog revision is not approved here.",
+      "inputs": [
+        "google/gemma-4-12B-it",
+        "candidate revision 707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7"
+      ],
+      "outputs": [
+        "readiness report with ready_for_gpu_reservation false until the blockers clear"
+      ],
+      "dependencies": [],
+      "resource_profile_id": "cpu-acquire",
+      "resources": {
+        "process_ram": "8G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/g00_gemma_readiness.sbatch",
+        "invoked_by": null
+      },
+      "gates": [
+        "not selected by submit_train_first.sh",
+        "do not download weights",
+        "do not reserve a GPU",
+        "do not treat the candidate revision as an approved pin"
+      ],
+      "acceptance_criteria": [
+        "the report names google/gemma-4-12B-it and refuses google/gemma-4-12B",
+        "ready_for_gpu_reservation stays false while the isolated Gemma4 runtime is absent or the revision is unapproved"
+      ],
+      "preparation_status": "AWAITING_AUTHORIZATION",
+      "authorization": "not_authorized",
+      "technical_block": false,
+      "block_reasons": [],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": false,
+      "requires_tokenizer": false,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "G00"
+    },
+    {
+      "program": "CONDITIONING",
+      "system_id": "gemma4_12b_it",
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "G01 would acquire one approved revision and refuse to overwrite an accepted snapshot. No revision is approved in this checkout.",
+      "inputs": [
+        "an approved 40-character revision, which this registry does not contain"
+      ],
+      "outputs": [
+        "sha256 and byte size for each snapshot file"
+      ],
+      "dependencies": [],
+      "resource_profile_id": "cpu-acquire",
+      "resources": {
+        "process_ram": "8G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/g01_gemma_acquire.sbatch",
+        "invoked_by": null
+      },
+      "gates": [
+        "not selected by submit_train_first.sh",
+        "GPU jobs must not download",
+        "do not overwrite an accepted checkpoint"
+      ],
+      "acceptance_criteria": [
+        "the candidate revision is refused",
+        "a scheduler COMPLETED state would not approve the revision"
+      ],
+      "preparation_status": "BLOCKED",
+      "authorization": "not_authorized",
+      "technical_block": true,
+      "block_reasons": [
+        {
+          "code": "revision_not_approved",
+          "evidence": "707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7 is only a catalog candidate. APPROVED_REVISIONS is empty."
+        }
+      ],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": false,
+      "requires_tokenizer": false,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "G01"
+    },
+    {
+      "program": "CONDITIONING",
+      "system_id": "gemma4_12b_it",
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "G02 is an L40S preflight of one invented sentence. It is not the Gold campaign and it is not authorized to load weights.",
+      "inputs": [
+        "local Safetensors snapshot of an approved revision"
+      ],
+      "outputs": [
+        "technical preflight report with measured memory still empty in this checkout"
+      ],
+      "dependencies": [],
+      "resource_profile_id": "l40s-infer",
+      "resources": {
+        "process_ram": "64G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/g02_gemma_preflight.sbatch",
+        "invoked_by": null
+      },
+      "gates": [
+        "not selected by submit_train_first.sh",
+        "explicit gpu:l40s allocation",
+        "local_files_only",
+        "no quantization",
+        "invented fixture only"
+      ],
+      "acceptance_criteria": [
+        "channel separation is still unverified against the candidate template",
+        "VRAM remains unmeasured",
+        "Gold inference stays closed"
+      ],
+      "preparation_status": "BLOCKED",
+      "authorization": "not_authorized",
+      "technical_block": true,
+      "block_reasons": [
+        {
+          "code": "revision_not_approved",
+          "evidence": "G02 cannot load weights while the candidate revision is unapproved."
+        },
+        {
+          "code": "channel_separator_unverified",
+          "evidence": "The published 12B channel pattern has not been compared with the candidate chat template."
+        },
+        {
+          "code": "vram_unverified",
+          "evidence": "The bf16 weight size is an estimate. No L40S measurement is stored."
+        }
+      ],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": false,
+      "requires_tokenizer": false,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": true,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": true,
+      "id": "G02"
+    },
+    {
+      "program": "CONDITIONING",
+      "system_id": "gemma4_12b_it",
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "G03 paired invented-text smoke for C0 and C1. A technical pass does not authorize Gold.",
+      "inputs": [
+        "two invented sentences",
+        "common-instruction-shell-v2"
+      ],
+      "outputs": [
+        "manifest.json",
+        "predictions.jsonl",
+        "failures.jsonl",
+        "statistics.json"
+      ],
+      "dependencies": [],
+      "resource_profile_id": "l40s-infer",
+      "resources": {
+        "process_ram": "64G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/g03_gemma_invented_smoke.sbatch",
+        "invoked_by": null
+      },
+      "gates": [
+        "not selected by submit_train_first.sh",
+        "one weight load for both conditions",
+        "does not authorize G04"
+      ],
+      "acceptance_criteria": [
+        "technical_pass is not a scientific result",
+        "the candidate revision remains unapproved"
+      ],
+      "preparation_status": "BLOCKED",
+      "authorization": "not_authorized",
+      "technical_block": true,
+      "block_reasons": [
+        {
+          "code": "revision_not_approved",
+          "evidence": "G03 cannot load weights while the candidate revision is unapproved."
+        }
+      ],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "one_retry_for_infrastructure_or_timeout_only_after_authorization_and_identical_across_conditions",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": false,
+      "requires_tokenizer": false,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": true,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": true,
+      "id": "G03"
+    },
+    {
+      "program": "CONDITIONING",
+      "system_id": "gemma4_12b_it",
+      "dataset_id": "teresia_hohfeld",
+      "split": "canonical_documents",
+      "condition": null,
+      "protocol_id": null,
+      "summary": "G04 names the 36-document Hohfeld cohort and refuses to launch. Annotations are not prompt material.",
+      "inputs": [
+        "canonical document identities, not annotations"
+      ],
+      "outputs": [
+        "refusal report"
+      ],
+      "dependencies": [],
+      "resource_profile_id": "cpu-acquire",
+      "resources": {
+        "process_ram": "8G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/g04_gemma_campaign.sbatch",
+        "invoked_by": null
+      },
+      "gates": [
+        "not selected by submit_train_first.sh",
+        "phase lock closed",
+        "human authorization is not an environment variable",
+        "no Gold training"
+      ],
+      "acceptance_criteria": [
+        "launch is refused",
+        "C0 and C1 would share checkpoint, tokenizer, and decoding"
+      ],
+      "preparation_status": "BLOCKED",
+      "authorization": "not_authorized",
+      "technical_block": true,
+      "block_reasons": [
+        {
+          "code": "gold_inference_closed",
+          "evidence": "G04_PHASE_LOCK is closed. Accredited G02 and G03 reports are absent, and no revision is approved."
+        }
+      ],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "one_retry_for_infrastructure_or_timeout_only_after_authorization_and_identical_across_conditions",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": false,
+      "requires_tokenizer": false,
+      "requires_real_preflight": true,
+      "real_preflight_done": false,
+      "requires_no_truncation": true,
+      "requires_frozen_output_budget": true,
+      "output_budget_frozen": false,
+      "requires_channel_separator": true,
+      "id": "G04"
+    },
+    {
+      "program": "CONDITIONING",
+      "system_id": "gemma4_12b_it",
+      "dataset_id": null,
+      "split": null,
+      "condition": null,
+      "protocol_id": null,
+      "summary": "G05 prepares relation and triplet P0 tables for the three predeclared estimands. It does not publish a scientific contrast.",
+      "inputs": [
+        "exported predictions",
+        "a gold file that this checkout does not point at Hohfeld"
+      ],
+      "outputs": [
+        "evaluation table with relation and triplet precision, recall, and F1"
+      ],
+      "dependencies": [],
+      "resource_profile_id": "cpu-acquire",
+      "resources": {
+        "process_ram": "8G",
+        "vram": null
+      },
+      "executor": {
+        "kind": "existing_sbatch",
+        "path": "jobs/cesvima/g05_gemma_evaluate.sbatch",
+        "invoked_by": null
+      },
+      "gates": [
+        "not selected by submit_train_first.sh",
+        "exact_multiset_v1",
+        "strict_inline",
+        "do not choose an estimand after seeing scores"
+      ],
+      "acceptance_criteria": [
+        "experimental_f1 stays false",
+        "the C1-C0 contrast stays withheld"
+      ],
+      "preparation_status": "BLOCKED",
+      "authorization": "not_authorized",
+      "technical_block": true,
+      "block_reasons": [
+        {
+          "code": "scientific_publication_withheld",
+          "evidence": "G05 can score supplied files, but this checkout does not treat those numbers as a campaign result."
+        }
+      ],
+      "training": false,
+      "included_in_submit_all": false,
+      "evaluation": null,
+      "retry_policy": "not_applicable_until_a_campaign_is_authorized",
+      "execution_permitted": false,
+      "leaderboard_class": null,
+      "requires_checkpoint_identity": false,
+      "requires_tokenizer": false,
+      "requires_real_preflight": false,
+      "real_preflight_done": false,
+      "requires_no_truncation": false,
+      "requires_frozen_output_budget": false,
+      "output_budget_frozen": false,
+      "requires_channel_separator": false,
+      "id": "G05"
     }
   ]
 }
