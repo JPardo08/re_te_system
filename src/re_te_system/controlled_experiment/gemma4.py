@@ -49,8 +49,10 @@ ESTIMATED_BF16_WEIGHT_BYTES = DECLARED_PARAMETER_COUNT * 2
 INCOMPATIBLE_INFERENCE_TRANSFORMERS = "4.57.6"
 MINIMUM_TRANSFORMERS = (5, 10, 1)
 BOS_TOKEN = "<bos>"
-PRIOR_SERIALIZATION_ID = "gemma4-12b-it-text-user-thinking-off-v1"
-SERIALIZATION_ID = "gemma4-12b-it-text-user-thinking-off-v2"
+SERIALIZATION_V1_ID = "gemma4-12b-it-text-user-thinking-off-v1"
+SERIALIZATION_V2_ID = "gemma4-12b-it-text-user-thinking-off-v2"
+PRIOR_SERIALIZATION_ID = SERIALIZATION_V2_ID
+SERIALIZATION_ID = "gemma4-12b-it-text-user-thinking-off-v3"
 CHANNEL_POLICY_ID = "gemma4-12b-thought-channel-v1"
 CHANNEL_OPEN = "<|channel>thought\n"
 CHANNEL_CLOSE = "<channel|>"
@@ -203,24 +205,36 @@ def grant_enabled(name: str) -> bool:
     return os.environ.get(name) == "1"
 
 
-def serialize_text_turn(rendered_prompt: str, *, enable_thinking: bool = False) -> str:
-    """One user turn with thinking off and a single leading ``<bos>``.
+def processor_user_content(rendered_prompt: str) -> str:
+    """Trim the user message the way the official processor does.
 
-    CESVIMA observed that the approved processor string was the v1
-    reconstruction plus that prefix. ``PRIOR_SERIALIZATION_ID`` names v1.
-    Exact equality with the snapshot processor still has to be repeated there.
+    Jinja ``trim`` removes only leading and trailing whitespace. Interior
+    newlines from the shell stay. v2 kept a trailing newline before ``<turn|>``.
     """
-    if not isinstance(rendered_prompt, str) or rendered_prompt == "":
+    if not isinstance(rendered_prompt, str):
         raise ValueError("rendered prompt must be a non-empty string")
+    if BOS_TOKEN in rendered_prompt:
+        raise ValueError("rendered prompt already contains <bos>")
+    trimmed = rendered_prompt.strip()
+    if trimmed == "":
+        raise ValueError("rendered prompt must be a non-empty string")
+    return trimmed
+
+
+def serialize_text_turn(rendered_prompt: str, *, enable_thinking: bool = False) -> str:
+    """One user turn with thinking off, one leading ``<bos>``, and trimmed content.
+
+    ``SERIALIZATION_V1_ID`` has no BOS. ``SERIALIZATION_V2_ID`` adds the BOS and
+    keeps the shell's trailing newline. v3 removes that trailing whitespace.
+    """
     if enable_thinking:
         raise GemmaThinkingNotAuthorized(
             "controlled serialization keeps thinking off; the answer must be TSV"
         )
-    if BOS_TOKEN in rendered_prompt:
-        raise ValueError("rendered prompt already contains <bos>")
+    content = processor_user_content(rendered_prompt)
     body = (
         "<|turn>user\n"
-        + rendered_prompt
+        + content
         + "<turn|>\n<|turn>model\n"
         + CHANNEL_OPEN
         + CHANNEL_CLOSE
@@ -440,6 +454,7 @@ def readiness_report() -> dict[str, Any]:
         "result_role": RESULT_ROLE,
         "scientific_ready": False,
         "prior_serialization_id": PRIOR_SERIALIZATION_ID,
+        "serialization_history": [SERIALIZATION_V1_ID, SERIALIZATION_V2_ID],
         "serialization_id": SERIALIZATION_ID,
         "stage": "G00",
         "vram_bytes_measured": None,

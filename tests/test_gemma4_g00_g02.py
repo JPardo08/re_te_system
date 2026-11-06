@@ -19,6 +19,8 @@ from re_te_system.controlled_experiment.gemma4 import (
     ESTIMATED_BF16_WEIGHT_BYTES,
     G01_ENV,
     G02_ENV,
+    INVENTED_PREFLIGHT_TEXT,
+    INVENTED_SMOKE_DOCUMENTS,
     MODEL_ID,
     GemmaAcquireNotAuthorized,
     GemmaAllocationError,
@@ -221,7 +223,8 @@ def test_serialization_uses_shell_without_thinking_or_truncation() -> None:
     serialized = serialize_text_turn(rendered, enable_thinking=False)
     assert serialized.startswith(BOS_TOKEN + "<|turn>user\n")
     assert serialized.count(BOS_TOKEN) == 1
-    assert rendered in serialized
+    assert rendered.strip() in serialized
+    assert rendered not in serialized
     assert serialized.endswith("<turn|>\n<|turn>model\n" + CHANNEL_OPEN + CHANNEL_CLOSE)
     assert render_serialized_turn("C1", text).count(text) == 1
     try:
@@ -258,7 +261,7 @@ def test_serialized_turn_keeps_one_bos_and_shared_shell() -> None:
     serialized = serialize_text_turn(rendered, enable_thinking=False)
     body = serialized[len(BOS_TOKEN) :]
     assert body == (
-        "<|turn>user\n" + rendered + "<turn|>\n<|turn>model\n" + CHANNEL_OPEN + CHANNEL_CLOSE
+        "<|turn>user\n" + rendered.strip() + "<turn|>\n<|turn>model\n" + CHANNEL_OPEN + CHANNEL_CLOSE
     )
     assert serialized.count(BOS_TOKEN) == 1
     c0 = render_serialized_turn("C0", text)
@@ -271,10 +274,15 @@ def test_serialized_turn_keeps_one_bos_and_shared_shell() -> None:
     assert identity["c0_prompt_sha256"] != identity["c1_prompt_sha256"]
     assert sha256_text(c0) == identity["c0_serialized_sha256"]
     assert sha256_text(c1) == identity["c1_serialized_sha256"]
-    assert SERIALIZATION_ID == "gemma4-12b-it-text-user-thinking-off-v2"
-    assert PRIOR_SERIALIZATION_ID == "gemma4-12b-it-text-user-thinking-off-v1"
-    assert readiness_report()["serialization_id"] == SERIALIZATION_ID
-    assert readiness_report()["prior_serialization_id"] == PRIOR_SERIALIZATION_ID
+    assert SERIALIZATION_ID == "gemma4-12b-it-text-user-thinking-off-v3"
+    assert PRIOR_SERIALIZATION_ID == "gemma4-12b-it-text-user-thinking-off-v2"
+    report = readiness_report()
+    assert report["serialization_id"] == SERIALIZATION_ID
+    assert report["prior_serialization_id"] == PRIOR_SERIALIZATION_ID
+    assert report["serialization_history"] == [
+        "gemma4-12b-it-text-user-thinking-off-v1",
+        "gemma4-12b-it-text-user-thinking-off-v2",
+    ]
     try:
         serialize_text_turn(rendered, enable_thinking=True)
     except GemmaThinkingNotAuthorized:
@@ -287,6 +295,13 @@ def test_serialized_turn_keeps_one_bos_and_shared_shell() -> None:
         pass
     else:
         raise AssertionError("empty prompt was serialized")
+    for blank in (" ", "\n", "\t\n "):
+        try:
+            serialize_text_turn(blank)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"whitespace-only prompt was serialized: {blank!r}")
     try:
         serialize_text_turn(BOS_TOKEN + "already")
     except ValueError as exc:
@@ -349,6 +364,63 @@ def test_serialized_turn_keeps_one_bos_and_shared_shell() -> None:
         assert "already contains <bos>" in str(exc)
     else:
         raise AssertionError("add_special_tokens=True was accepted")
+
+
+def test_v3_matches_the_observed_processor_strings() -> None:
+    from re_te_system.controlled_experiment.contracts import sha256_text
+    from re_te_system.controlled_experiment.gemma4 import smoke_requests
+
+    observed = {
+        ("invented-gemma-01", "C0"): 1458,
+        ("invented-gemma-01", "C1"): 1512,
+        ("invented-gemma-02", "C0"): 1461,
+        ("invented-gemma-02", "C1"): 1515,
+    }
+    requests = smoke_requests()
+    assert [(item["document_id"], item["condition"]) for item in requests] == [
+        ("invented-gemma-01", "C0"),
+        ("invented-gemma-01", "C1"),
+        ("invented-gemma-02", "C0"),
+        ("invented-gemma-02", "C1"),
+    ]
+    by_key = {(item["document_id"], item["condition"]): item for item in requests}
+    interior = "Alpha  keeps two spaces.\n\nBeta keeps a blank line.\n"
+    serialized_interior = serialize_text_turn(interior)
+    assert "Alpha  keeps two spaces.\n\nBeta keeps a blank line.<turn|>" in serialized_interior
+    assert "\n<turn|>" not in serialized_interior
+    preflight = serialize_text_turn(INVENTED_PREFLIGHT_TEXT)
+    assert INVENTED_PREFLIGHT_TEXT + "<turn|>" in preflight
+    assert preflight.count(BOS_TOKEN) == 1
+    for document in INVENTED_SMOKE_DOCUMENTS:
+        for condition in ("C0", "C1"):
+            rendered = render_controlled_prompt(condition, document["text"])
+            official = serialize_text_turn(rendered)
+            legacy = (
+                BOS_TOKEN
+                + "<|turn>user\n"
+                + rendered
+                + "<turn|>\n<|turn>model\n"
+                + CHANNEL_OPEN
+                + CHANNEL_CLOSE
+            )
+            assert official == (
+                BOS_TOKEN
+                + "<|turn>user\n"
+                + rendered.strip()
+                + "<turn|>\n<|turn>model\n"
+                + CHANNEL_OPEN
+                + CHANNEL_CLOSE
+            )
+            assert official == legacy.replace("\n<turn|>", "<turn|>", 1)
+            assert "Relations:<turn|>" in official
+            assert "Relations:\n<turn|>" not in official
+            assert official.count(BOS_TOKEN) == 1
+            assert len(official) == observed[(document["document_id"], condition)]
+            request = by_key[(document["document_id"], condition)]
+            assert request["rendered_prompt_sha256"] == sha256_text(rendered)
+            assert request["serialized_sha256"] == sha256_text(official)
+            assert request["rendered_prompt_sha256"] != request["serialized_sha256"]
+            assert rendered.endswith("\n") and rendered not in official
 
 
 def test_budget_timeout_and_runtime_classification() -> None:
@@ -1051,6 +1123,7 @@ def _run_all() -> None:
     test_channel_separation_and_tsv_do_not_repair_output()
     test_serialization_uses_shell_without_thinking_or_truncation()
     test_serialized_turn_keeps_one_bos_and_shared_shell()
+    test_v3_matches_the_observed_processor_strings()
     test_budget_timeout_and_runtime_classification()
     test_commands_and_registry_stay_closed()
     with tempfile.TemporaryDirectory() as directory:
