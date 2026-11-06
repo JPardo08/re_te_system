@@ -1274,12 +1274,28 @@ def classify_smoke_output(
         return _failure_result("timeout", "the generation exceeded its budget")
     if state == "external_infrastructure_error":
         return _failure_result("external_infrastructure_error", "the runtime reported an infrastructure error")
+    if state == "model_execution_error":
+        return _failure_result("model_execution_error", "the model execution failed")
+    if state not in {"completed", "truncated"}:
+        return _failure_result(state, "the generation did not complete")
+    if truncated or state == "truncated":
+        parsed = transport_and_parse(
+            raw or "",
+            generation_metadata={"output_reached_limit": True},
+        )
+        return {
+            "failure": {
+                "kind": "token_limit",
+                "message": "generation reached max_new_tokens and is not a valid prediction",
+            },
+            "parsed": parsed,
+            "principal_state": "truncated",
+            "raw": raw,
+            "valid_prediction": False,
+        }
     if raw is None or raw == "":
         return _failure_result("empty_model_output", "the model returned no text")
-    parsed = transport_and_parse(
-        raw,
-        generation_metadata={"output_reached_limit": True} if truncated else None,
-    )
+    parsed = transport_and_parse(raw)
     valid = parsed["channel"]["status"] in {"answer_only", "separated"} and not parsed["issues"]
     return {
         "failure": None if valid else {
@@ -1287,9 +1303,9 @@ def classify_smoke_output(
             "message": parsed["issues"][0]["message"] if parsed["issues"] else parsed["channel"].get("message"),
         },
         "parsed": parsed,
-        "principal_state": "completed" if state == "completed" and not truncated else state,
+        "principal_state": "completed",
         "raw": raw,
-        "valid_prediction": valid and not truncated and state == "completed",
+        "valid_prediction": valid,
     }
 
 
@@ -1342,6 +1358,7 @@ def write_smoke_artifacts(
     attempts: Sequence[Mapping[str, Any]],
     *,
     load_count: int,
+    revision: str | None = None,
 ) -> dict[str, Any]:
     target = Path(directory)
     if (target / "manifest.json").exists():
@@ -1358,9 +1375,12 @@ def write_smoke_artifacts(
                 truncated=attempt.get("truncated") is True,
             )
         row = {
+            "attempt_count": attempt.get("attempt_count", 1),
             "condition": attempt["condition"],
             "document_id": attempt["document_id"],
+            "generation_state": classified.get("principal_state"),
             "parsed_triples": classified["parsed"]["triples"] if classified.get("parsed") else [],
+            "prior_failure": attempt.get("prior_failure"),
             "parse_issues": classified["parsed"]["issues"] if classified.get("parsed") else [],
             "raw": classified.get("raw"),
             "rendered_prompt_sha256": attempt.get("rendered_prompt_sha256"),
@@ -1369,14 +1389,15 @@ def write_smoke_artifacts(
         }
         predictions.append(row)
         if classified["failure"] is not None or classified["valid_prediction"] is not True:
-            failures.append(
-                {
-                    "condition": attempt["condition"],
-                    "document_id": attempt["document_id"],
-                    "kind": (classified["failure"] or {}).get("kind", classified["principal_state"]),
-                    "message": (classified["failure"] or {}).get("message", ""),
-                }
-            )
+            failure_row = {
+                "condition": attempt["condition"],
+                "document_id": attempt["document_id"],
+                "kind": (classified["failure"] or {}).get("kind", classified["principal_state"]),
+                "message": (classified["failure"] or {}).get("message", ""),
+            }
+            if attempt.get("prior_failure") is not None:
+                failure_row["prior_failure"] = attempt["prior_failure"]
+            failures.append(failure_row)
     passed = smoke_technical_pass(attempts, load_count)
     statistics = {
         "g04_authorized": False,
@@ -1393,14 +1414,18 @@ def write_smoke_artifacts(
             "decoding_sha256": paired_condition_identity(INVENTED_SMOKE_DOCUMENTS[0]["text"])[
                 "decoding_sha256"
             ],
+            "document_order": [item["document_id"] for item in INVENTED_SMOKE_DOCUMENTS],
             "g04_authorized": False,
+            "load_count": load_count,
             "model_id": MODEL_ID,
             "result_role": "gemma4_invented_smoke_not_scientific_f1",
-            "revision_approved": False,
+            "revision": revision or CANDIDATE_REVISION,
             "scientific_result": False,
+            "serialization_id": SERIALIZATION_ID,
             "shell_id": "common-instruction-shell-v2",
             "stage": "G03",
             "technical_pass": passed,
+            "technical_smoke": True,
         }
     )
     _write_json(target / "manifest.json", manifest)
@@ -1431,6 +1456,193 @@ def write_smoke_artifacts(
     return {"manifest": manifest, "statistics": statistics}
 
 
+def run_invented_smoke(
+    *,
+    revision: str,
+    snapshot_dir: Path,
+    allocation_text: str,
+    session_factory: Callable[[], Any],
+    confirm_device: Callable[[], str],
+) -> dict[str, Any]:
+    """Four invented C0/C1 generations on one already accepted local snapshot.
+
+    The returned payload is technical smoke. It does not authorize G04.
+    """
+    if not grant_enabled(G03_ENV):
+        raise GemmaPreflightNotAuthorized("G03 grant is missing")
+    assert_revision_approved(revision)
+    if os.environ.get("HF_HUB_OFFLINE") != "1" or os.environ.get("TRANSFORMERS_OFFLINE") != "1":
+        raise GemmaPreflightNotAuthorized(
+            "G03 requires HF_HUB_OFFLINE=1 and TRANSFORMERS_OFFLINE=1"
+        )
+    refuse_gold_reference(snapshot_dir)
+    _assert_l40s_allocation(allocation_text)
+    observed_device = confirm_device()
+    if not isinstance(observed_device, str) or not observed_device:
+        raise GemmaAllocationError("visible CUDA device was not reported")
+    if "a100" in observed_device.lower():
+        raise GemmaAllocationError(f"A100 is refused; visible device is {observed_device}")
+    if "l40s" not in observed_device.lower():
+        raise GemmaAllocationError(f"visible device is not an L40S: {observed_device}")
+    _assert_accepted_revision(Path(snapshot_dir), revision)
+    contract = preflight_decoding_contract()
+    if contract.do_sample is not False or contract.max_new_tokens != PREFLIGHT_MAX_NEW_TOKENS:
+        raise GemmaPreflightNotAuthorized("G03 decoding contract drifted from the G02 preflight")
+    planned = smoke_requests()
+    if [item["uses_gold"] for item in planned] != [False, False, False, False]:
+        raise GemmaGoldAccessRefused("invented smoke requests must not use Gold")
+    session = session_factory()
+    attempts = _generate_smoke_attempts(session, planned, contract)
+    return {
+        "attempts": attempts,
+        "decoding": {
+            "do_sample": False,
+            "max_new_tokens": PREFLIGHT_MAX_NEW_TOKENS,
+            "same_for_c0_and_c1": True,
+        },
+        "g04_authorized": False,
+        "load_count": 1,
+        "revision": revision,
+        "scientific_result": False,
+        "serialization_id": SERIALIZATION_ID,
+    }
+
+
+def _assert_accepted_revision(snapshot_dir: Path, revision: str) -> None:
+    marker = snapshot_dir.parent / "accepted_revision.txt"
+    if not marker.is_file():
+        raise GemmaWeightFormatError(f"acceptance marker is missing beside {snapshot_dir}")
+    recorded = marker.read_text(encoding="utf-8").strip()
+    if recorded != revision:
+        raise GemmaRevisionNotApproved(
+            f"acceptance marker records {recorded!r}, not the requested revision {revision!r}"
+        )
+    verified = verify_snapshot_directory(snapshot_dir)
+    if verified["verified"] is not True:
+        raise GemmaWeightFormatError("; ".join(verified["errors"]))
+
+
+def _generate_smoke_attempts(
+    session: Any,
+    planned: Sequence[Mapping[str, Any]],
+    contract: GemmaDecodingContract,
+) -> list[dict[str, Any]]:
+    expected = [
+        (document["document_id"], condition)
+        for document in INVENTED_SMOKE_DOCUMENTS
+        for condition in PAIRED_CONDITIONS
+    ]
+    if [(item["document_id"], item["condition"]) for item in planned] != expected:
+        raise GemmaModelIdentityError("smoke request order is not the invented C0/C1 order")
+    rendered_by_key: dict[tuple[str, str], str] = {}
+    for document in INVENTED_SMOKE_DOCUMENTS:
+        refuse_gold_reference(document["text"])
+        for condition in PAIRED_CONDITIONS:
+            rendered = render_controlled_prompt(condition, document["text"])
+            serialized = serialize_text_turn(rendered, enable_thinking=False)
+            rendered_by_key[(document["document_id"], condition)] = serialized
+            official = session.apply_chat_template(
+                [{"role": "user", "content": rendered}],
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=False,
+            )
+            if official != serialized:
+                raise GemmaChannelError(
+                    "the loaded processor template does not match the published 12B reconstruction"
+                )
+    attempts: list[dict[str, Any]] = []
+    for request in planned:
+        key = (str(request["document_id"]), str(request["condition"]))
+        serialized = rendered_by_key[key]
+        if sha256_text(serialized) != request["serialized_sha256"]:
+            raise GemmaModelIdentityError("serialized hash drifted from smoke_requests()")
+        encoded = encode_serialized_turn(session, serialized, return_tensors="pt")
+        if encoded.get("truncation") is True:
+            raise GemmaSilentTruncationRefused("tokenizer reported truncated prompt tokens")
+        if len(_flat_input_ids(encoded.get("input_ids"))) + int(contract.max_new_tokens) > DECLARED_NATIVE_CONTEXT_LENGTH:
+            raise GemmaContextBudgetError("invented smoke prompt does not fit the declared context")
+        chosen, prior, attempt_count = _generate_with_retry(
+            session,
+            encoded,
+            contract,
+            str(request["condition"]),
+        )
+        classified = classify_smoke_output(
+            chosen["raw"] if isinstance(chosen["raw"], str) else None,
+            state=str(chosen["state"]),
+            truncated=chosen["truncated"] is True,
+        )
+        if chosen["exception"] and isinstance(classified.get("failure"), dict):
+            classified["failure"]["message"] = str(chosen["exception"])
+        attempts.append(
+            {
+                "attempt_count": attempt_count,
+                "classified": classified,
+                "condition": request["condition"],
+                "document_id": request["document_id"],
+                "exception": chosen["exception"],
+                "load_count": 1,
+                "prior_failure": prior,
+                "raw": chosen["raw"],
+                "rendered_prompt_sha256": request["rendered_prompt_sha256"],
+                "serialized_sha256": request["serialized_sha256"],
+                "state": chosen["state"],
+                "truncated": chosen["truncated"],
+                "within_budget": chosen["exception"] is None and chosen["state"] == "completed",
+            }
+        )
+    return attempts
+
+
+def _generate_with_retry(
+    session: Any,
+    encoded: Mapping[str, Any],
+    contract: GemmaDecodingContract,
+    condition: str,
+) -> tuple[dict[str, Any], dict[str, str] | None, int]:
+    first = _generate_once(session, encoded, contract)
+    if first["state"] not in RETRYABLE_STATES or not same_retry_policy(condition, str(first["state"]), 1):
+        return first, None, 1
+    prior = {"exception": str(first["exception"] or ""), "state": str(first["state"])}
+    return _generate_once(session, encoded, contract), prior, 2
+
+
+def _generate_once(
+    session: Any,
+    encoded: Mapping[str, Any],
+    contract: GemmaDecodingContract,
+) -> dict[str, Any]:
+    try:
+        outcome = session.generate(
+            encoded,
+            do_sample=False,
+            max_new_tokens=contract.max_new_tokens,
+        )
+    except GemmaWorkerTimeout as exc:
+        return {"exception": str(exc), "raw": None, "state": "timeout", "truncated": False}
+    except Exception as exc:
+        return {
+            "exception": str(exc),
+            "raw": None,
+            "state": classify_runtime_failure(exc)["kind"],
+            "truncated": False,
+        }
+    if not isinstance(outcome, Mapping) or not isinstance(outcome.get("raw"), str):
+        return {
+            "exception": "generate did not return text",
+            "raw": None,
+            "state": "model_execution_error",
+            "truncated": False,
+        }
+    return {
+        "exception": None,
+        "raw": outcome["raw"],
+        "state": "completed",
+        "truncated": outcome.get("truncated") is True,
+    }
+
+
 def persist_g03(directory: Path, result: Mapping[str, Any]) -> dict[str, Any]:
     """Write the smoke contract. A loader result cannot authorize G04."""
     if result.get("g04_authorized") is True or result.get("scientific_result") is True:
@@ -1440,7 +1652,13 @@ def persist_g03(directory: Path, result: Mapping[str, Any]) -> dict[str, Any]:
     attempts = result.get("attempts")
     if not isinstance(attempts, list) or not attempts:
         raise GemmaPreflightNotAuthorized("G03 loader did not return attempts")
-    written = write_smoke_artifacts(directory, attempts, load_count=1)
+    recorded_revision = result.get("revision")
+    written = write_smoke_artifacts(
+        directory,
+        attempts,
+        load_count=1,
+        revision=recorded_revision if isinstance(recorded_revision, str) else CANDIDATE_REVISION,
+    )
     if written["statistics"]["g04_authorized"] is not False:
         raise GemmaGoldNotAuthorized("smoke statistics authorized G04")
     return written

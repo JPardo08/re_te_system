@@ -22,6 +22,7 @@ unset GEMMA_G04_RUN_AUTHORIZED
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 revision="${GEMMA_REQUESTED_REVISION:?GEMMA_REQUESTED_REVISION is required and is not implied by the catalog}"
+snapshot="${GEMMA_SNAPSHOT_DIR:?GEMMA_SNAPSHOT_DIR is required and must be the accepted local snapshot}"
 if [[ ! -x "${GEMMA_VENV}/bin/python" ]]; then
   echo "FAIL: isolated Gemma interpreter is missing: ${GEMMA_VENV}/bin/python" >&2
   exit 2
@@ -34,4 +35,5 @@ output_dir="${P3_RUNS_ROOT}/gemma4/g03/${SLURM_JOB_ID}"
 exec "${GEMMA_VENV}/bin/python" "${SYSTEM_ROOT}/scripts/cesvima/g03_gemma_invented_smoke.py" \
   --execute \
   --revision "${revision}" \
+  --snapshot-dir "${snapshot}" \
   --output-dir "${output_dir}"

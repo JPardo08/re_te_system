@@ -1825,6 +1825,7 @@
       "gates": [
         "not selected by submit_train_first.sh",
         "one weight load for both conditions",
+        "accepted local snapshot and one L40S",
         "does not authorize G04"
       ],
       "acceptance_criteria": [
