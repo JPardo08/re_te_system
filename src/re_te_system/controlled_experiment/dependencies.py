@@ -16,6 +16,7 @@ copies and does not invent a repository path.
 
 from __future__ import annotations
 
+import importlib
 import os
 import subprocess
 import sys
@@ -66,6 +67,48 @@ def _located(package: str, module: Any, method: str) -> dict[str, str]:
         "module_file": None if path is None else str(path),
         "package": package,
     }
+
+
+def ensure_conditioning_runtime() -> dict[str, str]:
+    """Import the checked-in C0/C1 shell. Do not vendor a second copy.
+
+    ``re_te_benchmark`` on ``main`` (5fe30ca) has the specification and the C1
+    label file, but not ``conditioning/shell.py``. The renderer
+    ``common-instruction-shell-v2`` is on ``feat/paper3-conditioning`` at
+    commit 36d6203.
+    """
+    located = ensure_package("re_te_benchmark", "re_te_benchmark")
+    required = (
+        "re_te_benchmark.conditioning",
+        "re_te_benchmark.conditioning.shell",
+        "re_te_benchmark.conditioning.c2",
+    )
+    missing: list[str] = []
+    first_error: ModuleNotFoundError | None = None
+    for name in required:
+        try:
+            importlib.import_module(name)
+        except ModuleNotFoundError as exc:
+            missing.append(name)
+            if first_error is None:
+                first_error = exc
+    if missing:
+        revision = git_revision(repository_root_from_package("re_te_benchmark"))
+        raise ImportError(
+            "re_te_benchmark was imported "
+            f"({located['method']}, {located['module_file']}, HEAD {revision['head']}) "
+            "but does not provide " + ", ".join(missing) + ". "
+            "common-instruction-shell-v2 is checked in on branch "
+            "feat/paper3-conditioning at commit 36d6203 and is absent from main "
+            "5fe30ca. This runtime does not vendor a second shell."
+        ) from first_error
+    shell = importlib.import_module("re_te_benchmark.conditioning.shell")
+    if getattr(shell, "SHELL_ID", None) != "common-instruction-shell-v2":
+        raise ImportError(
+            "re_te_benchmark.conditioning.shell.SHELL_ID is "
+            f"{getattr(shell, 'SHELL_ID', None)!r}, not 'common-instruction-shell-v2'."
+        )
+    return located
 
 
 def repository_root_from_package(package: str) -> Path | None:

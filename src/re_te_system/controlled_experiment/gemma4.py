@@ -1189,9 +1189,9 @@ class GemmaGoldNotAuthorized(RuntimeError):
 def paired_condition_identity(text: str) -> dict[str, Any]:
     """Show that C0 and C1 share the shell and differ only by the frozen slot."""
     refuse_gold_reference(text)
-    from re_te_system.controlled_experiment.dependencies import ensure_package
+    from re_te_system.controlled_experiment.dependencies import ensure_conditioning_runtime
 
-    ensure_package("re_te_benchmark", "re_te_benchmark")
+    ensure_conditioning_runtime()
     from re_te_benchmark.conditioning.c2 import load_c1_labels
     from re_te_benchmark.conditioning.shell import SHELL_ID, conditioning_for
 

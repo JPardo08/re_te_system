@@ -278,7 +278,7 @@ G00, G01 y G02 tienen sbatch propio y no entran en `submit_train_first.sh`. G00 
 
 ## Gemma 4 G03-G05
 
-G03 prepara el smoke pareado C0/C1 sobre dos frases inventadas. El sbatch exige `GEMMA_SNAPSHOT_DIR` y carga ese snapshot local una sola vez, en BF16, para las cuatro combinaciones. Este checkout no lo ejecuta. El PASS es tecnico: no autoriza G04 ni es un F1. Los artefactos son `manifest.json`, `predictions.jsonl`, `failures.jsonl` y `statistics.json`, mas el desglose por condicion que ya usa el puente de evaluacion.
+G03 prepara el smoke pareado C0/C1 sobre dos frases inventadas. El sbatch exige `GEMMA_SNAPSHOT_DIR` y carga ese snapshot local una sola vez, en BF16, para las cuatro combinaciones. Los prompts salen de `re_te_benchmark.conditioning.shell` (`common-instruction-shell-v2`, commit `36d6203` en `feat/paper3-conditioning`). `main` en `5fe30ca` no contiene ese paquete: el job `1369033` fallo por eso. No se copia el shell dentro de Gemma. Este checkout no ejecuta G03. El PASS es tecnico: no autoriza G04 ni es un F1. Los artefactos son `manifest.json`, `predictions.jsonl`, `failures.jsonl` y `statistics.json`, mas el desglose por condicion que ya usa el puente de evaluacion.
 
 G04 nombra la cohorte de 36 documentos de `teresia_hohfeld` sin abrirla. Rechaza anotaciones, exige revision aprobada, snapshot, runtime, preflight G02, smoke G03, decodificacion congelada e identica, autorizacion humana y directorio seguro. Una variable de entorno no sustituye esas comprobaciones. El phase lock sigue cerrado, asi que el sbatch es de CPU y no reserva GPU. No se lanza Gold.
 

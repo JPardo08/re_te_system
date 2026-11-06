@@ -57,6 +57,7 @@ from re_te_system.controlled_experiment.contracts import (
 )
 from re_te_system.controlled_experiment.dependencies import (
     SYSTEM_REPO,
+    ensure_conditioning_runtime,
     ensure_package,
     git_revision,
     repository_root_from_package,
@@ -931,7 +932,7 @@ def _script_identity(extractor: ScriptedTsvExtractor) -> list[dict[str, Any]]:
 
 
 def _shell() -> Any:
-    ensure_package("re_te_benchmark", "re_te_benchmark")
+    ensure_conditioning_runtime()
     from re_te_benchmark.conditioning import shell
 
     return shell
