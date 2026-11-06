@@ -1750,7 +1750,7 @@
       },
       "gates": [
         "not selected by submit_train_first.sh",
-        "explicit gpu:l40s allocation",
+        "scontrol AllocTRES must assign exactly one gres/gpu:l40s and the visible CUDA device must be an L40S",
         "local_files_only",
         "no quantization",
         "invented fixture only"

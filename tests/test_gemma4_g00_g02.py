@@ -20,6 +20,7 @@ from re_te_system.controlled_experiment.gemma4 import (
     G02_ENV,
     MODEL_ID,
     GemmaAcquireNotAuthorized,
+    GemmaAllocationError,
     GemmaContextBudgetError,
     GemmaDuplicatePublication,
     GemmaGoldAccessRefused,
@@ -39,9 +40,11 @@ from re_te_system.controlled_experiment.gemma4 import (
     execute_bounded_preflight,
     preflight_decoding_contract,
     preflight_plan,
+    PROPOSED_DTYPE,
     official_layout_errors,
     publish_snapshot,
     readiness_report,
+    read_slurm_job_record,
     sha256_file,
     stream_copy,
     render_serialized_turn,
@@ -54,6 +57,7 @@ from re_te_system.controlled_experiment.gemma4 import (
     verify_snapshot_directory,
 )
 
+L40S_ALLOCATION = "cpu=8,mem=64G,node=1,billing=8,gres/gpu:l40s=1"
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts" / "cesvima"
 SUBMITTER = ROOT / "scripts" / "cesvima" / "submit_train_first.sh"
@@ -297,7 +301,7 @@ def test_preflight_loader_is_not_called_without_approval(tmp_path: Path = None) 
     try:
         execute_bounded_preflight(
             revision=CANDIDATE_REVISION,
-            allocation_text="gpu:l40s:1",
+            allocation_text=L40S_ALLOCATION,
             loader=loader,
             snapshot_dir=_snapshot(tmp_path / "snap"),
         )
@@ -339,7 +343,7 @@ def test_preflight_loader_is_not_called_without_approval(tmp_path: Path = None) 
     try:
         loaded = execute_bounded_preflight(
             revision=approved,
-            allocation_text="gpu:l40s:1",
+            allocation_text=L40S_ALLOCATION,
             loader=accepted_loader,
             snapshot_dir=tmp_path / "snap",
         )
@@ -351,6 +355,11 @@ def test_preflight_loader_is_not_called_without_approval(tmp_path: Path = None) 
     assert accepted[0]["local_files_only"] is True
     assert accepted[0]["quantization"] is None
     assert loaded["weights_loaded"] is True
+    assert loaded["allocation"] == {
+        "count": 1,
+        "gpu": "gres/gpu:l40s=1",
+        "source": "AllocTRES",
+    }
 
 
 def _official_snapshot(root: Path) -> Path:
@@ -512,7 +521,7 @@ def test_streaming_publication_matches_bytes_and_stays_closed(tmp_path: Path = N
     try:
         execute_bounded_preflight(
             revision=CANDIDATE_REVISION,
-            allocation_text="gpu:l40s:1",
+            allocation_text=L40S_ALLOCATION,
             loader=loader,
             snapshot_dir=destination,
         )
@@ -527,7 +536,7 @@ def test_streaming_publication_matches_bytes_and_stays_closed(tmp_path: Path = N
     try:
         loaded = execute_bounded_preflight(
             revision=CANDIDATE_REVISION,
-            allocation_text="gpu:l40s:1",
+            allocation_text=L40S_ALLOCATION,
             loader=loader,
             snapshot_dir=destination,
         )
@@ -722,10 +731,211 @@ def test_cli_refuses_gold_and_candidate_download(tmp_path: Path = None) -> None:
     os.environ.pop("SCRATCH_ROOT", None)
 
 
+def test_cesvima_alloctres_aggregate_is_not_a_second_gpu() -> None:
+    import re_te_system.controlled_experiment.gemma4 as gemma4
+
+    record = """AllocTRES=billing=82000,cpu=8,gres/gpu:l40s=1,gres/gpu=1,mem=64G,node=1
+ReqTRES=billing=82000,cpu=8,gres/gpu:l40s=1,gres/gpu=1,mem=64G,node=1
+TresPerNode=gres:gpu:l40s:1"""
+    assert gemma4._assert_l40s_allocation(record) == {
+        "count": 1,
+        "gpu": "gres/gpu:l40s=1",
+        "source": "AllocTRES",
+    }
+    _expect_allocation_error(
+        "AllocTRES=billing=82000,cpu=8,gres/gpu:l40s=1,gres/gpu=2,mem=64G,node=1 "
+        "ReqTRES=billing=82000,cpu=8,gres/gpu:l40s=1,gres/gpu=1,mem=64G,node=1",
+        "does not equal the typed total",
+    )
+
+
+def _expect_allocation_error(text: str, needle: str) -> None:
+    import re_te_system.controlled_experiment.gemma4 as gemma4
+
+    try:
+        gemma4._assert_l40s_allocation(text)
+    except GemmaAllocationError as exc:
+        assert needle in str(exc), str(exc)
+    else:
+        raise AssertionError(f"allocation was accepted: {text}")
+
+
+def test_l40s_allocation_requires_alloctres_and_visible_device() -> None:
+    import contextlib
+    import io
+    import types
+
+    import re_te_system.controlled_experiment.gemma4 as gemma4
+
+    valid = (
+        "JobId=1368319 JobName=p3-g02-gemma-preflight Partition=standard-gpu "
+        "AllocTRES=cpu=8,mem=64G,node=1,billing=8,gres/gpu:l40s=1 "
+        "ReqTRES=cpu=8,mem=64G,node=1,billing=8,gres/gpu:l40s=1 "
+        "TresPerNode=gres:gpu:l40s:1 Gres=gpu:l40s:1(IDX:0)"
+    )
+    accepted = gemma4._assert_l40s_allocation(valid)
+    assert accepted == {"count": 1, "gpu": "gres/gpu:l40s=1", "source": "AllocTRES"}
+    assert gemma4._assert_l40s_allocation(L40S_ALLOCATION) == accepted
+    _expect_allocation_error(
+        "JobId=1 JobName=l40s-lookalike AllocTRES=cpu=8,gres/gpu:a100=1",
+        "A100 is refused",
+    )
+    _expect_allocation_error(
+        "AllocTRES=cpu=8,mem=64G,node=1,billing=8,gres/gpu=1",
+        "untyped",
+    )
+    _expect_allocation_error(
+        "AllocTRES=cpu=8,mem=64G,node=1,billing=8",
+        "does not assign a GPU",
+    )
+    _expect_allocation_error("gpu:l40s:1", "AllocTRES is missing")
+    _expect_allocation_error("JobName=l40s", "job name")
+    _expect_allocation_error("SLURM_JOB_GRES=gpu:l40s:1", "AllocTRES is missing")
+    _expect_allocation_error(
+        "JobId=1 JobName=p3-g02-gemma-preflight "
+        "AllocTRES=cpu=8,mem=64G,node=1,billing=8,gres/gpu:l40s=1 "
+        "ReqTRES=cpu=8,mem=64G,node=1,billing=8,gres/gpu:a100=1",
+        "allocation metadata disagrees",
+    )
+    _expect_allocation_error(
+        "AllocTRES=cpu=8,gres/gpu:l40s=2",
+        "exactly one L40S",
+    )
+    calls: list[list[str]] = []
+
+    def runner(argv: list[str]) -> dict[str, object]:
+        calls.append(list(argv))
+        return {
+            "returncode": 0,
+            "stderr": "",
+            "stdout": valid + "\n",
+        }
+
+    os.environ["SLURM_JOB_GRES"] = "gpu:1"
+    os.environ["SLURM_JOB_NAME"] = "l40s"
+    try:
+        record = read_slurm_job_record("1368319", runner)
+    finally:
+        os.environ.pop("SLURM_JOB_GRES", None)
+        os.environ.pop("SLURM_JOB_NAME", None)
+    assert calls == [["scontrol", "-o", "show", "job", "1368319"]]
+    assert gemma4._assert_l40s_allocation(record)["count"] == 1
+    calls.clear()
+    try:
+        read_slurm_job_record("", runner)
+    except GemmaAllocationError as exc:
+        assert "SLURM_JOB_ID" in str(exc)
+    else:
+        raise AssertionError("missing job id was accepted")
+    assert calls == []
+
+    def failed(argv: list[str]) -> dict[str, object]:
+        return {"returncode": 1, "stderr": "access denied", "stdout": ""}
+
+    try:
+        read_slurm_job_record("1368319", failed)
+    except GemmaAllocationError as exc:
+        assert "scontrol could not read AllocTRES" in str(exc)
+        assert "access denied" in str(exc)
+    else:
+        raise AssertionError("scontrol failure was accepted")
+
+    sys.path.insert(0, str(SCRIPTS))
+    import cesvima_common
+    import g02_gemma_preflight
+
+    previous_torch = sys.modules.get("torch")
+
+    def install(name: str, *, available: bool = True) -> None:
+        module = types.ModuleType("torch")
+
+        class _Cuda:
+            @staticmethod
+            def is_available() -> bool:
+                return available
+
+            @staticmethod
+            def get_device_name(_index: int) -> str:
+                return name
+
+        module.cuda = _Cuda()
+        sys.modules["torch"] = module
+
+    try:
+        install("NVIDIA A100-SXM4-40GB")
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            try:
+                cesvima_common.require_cuda_family("l40s")
+            except SystemExit as exc:
+                assert exc.code == 1
+            else:
+                raise AssertionError("A100 device was accepted")
+        assert "A100 is forbidden" in buffer.getvalue()
+        assert "NVIDIA A100-SXM4-40GB" in buffer.getvalue()
+
+        install("NVIDIA H100 80GB HBM3")
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            try:
+                cesvima_common.require_cuda_family("l40s")
+            except SystemExit as exc:
+                assert exc.code == 1
+            else:
+                raise AssertionError("H100 device was accepted")
+        assert "visible device is NVIDIA H100 80GB HBM3" in buffer.getvalue()
+
+        install("NVIDIA L40S")
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            assert cesvima_common.require_cuda_family("l40s") == "NVIDIA L40S"
+        assert "PASS cuda-device NVIDIA L40S" in buffer.getvalue()
+    finally:
+        if previous_torch is None:
+            sys.modules.pop("torch", None)
+        else:
+            sys.modules["torch"] = previous_torch
+
+    seen: list[str] = []
+
+    def refuse_visible_device(expected: str) -> str:
+        seen.append(expected)
+        cesvima_common.fail(
+            "expected CUDA device family l40s; visible device is NVIDIA H100 80GB HBM3"
+        )
+        raise AssertionError("unreachable")
+
+    previous_probe = g02_gemma_preflight.require_cuda_family
+    g02_gemma_preflight.require_cuda_family = refuse_visible_device
+    try:
+        g02_gemma_preflight._load_local_safetensors(
+            local_files_only=True,
+            quantization=None,
+            model_id=MODEL_ID,
+            dtype=PROPOSED_DTYPE,
+        )
+    except SystemExit:
+        pass
+    else:
+        raise AssertionError("wrong visible device continued into model load")
+    finally:
+        g02_gemma_preflight.require_cuda_family = previous_probe
+    assert seen == ["l40s"]
+    g02_source = Path(g02_gemma_preflight.__file__).read_text(encoding="utf-8")
+    assert "scontrol" in g02_source
+    assert "SLURM_JOB_GRES" not in g02_source
+    assert "SLURM_JOB_NAME" not in g02_source
+    sbatch = (ROOT / "jobs" / "cesvima" / "g02_gemma_preflight.sbatch").read_text(encoding="utf-8")
+    assert "--gres=gpu:l40s:1" in sbatch
+    assert "SLURM_JOB_GRES=" not in sbatch
+
+
 def _run_all() -> None:
     import tempfile
 
     os.environ.pop("GEMMA_VENV", None)
+    test_l40s_allocation_requires_alloctres_and_visible_device()
+    test_cesvima_alloctres_aggregate_is_not_a_second_gpu()
     test_identity_rejects_base_and_unapproved_candidate()
     test_acquisition_grant_is_independent_of_the_identity_pin()
     test_channel_separation_and_tsv_do_not_repair_output()

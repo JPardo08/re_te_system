@@ -1,9 +1,15 @@
-"""G02: L40S preflight plan. This checkout does not execute the load."""
+"""G02: L40S preflight.
+
+--execute loads only after scontrol AllocTRES reports exactly one L40S and
+the visible CUDA device matches that family. Grants, offline mode, and the
+generation contract are unchanged.
+"""
 
 from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 from pathlib import Path
 
 from cesvima_common import fail, require_cuda_family, write_json
@@ -22,6 +28,7 @@ from re_te_system.controlled_experiment.gemma4 import (
     execute_bounded_preflight,
     preflight_decoding_contract,
     preflight_plan,
+    read_slurm_job_record,
     refuse_gold_reference,
     serialize_text_turn,
     transport_and_parse,
@@ -48,11 +55,8 @@ def main(argv: list[str] | None = None, loader=None) -> int:
     if args.snapshot_dir is None:
         fail("G02 --execute requires --snapshot-dir")
     os.environ["GEMMA_SNAPSHOT_DIR"] = str(args.snapshot_dir)
-    allocation = " ".join(
-        os.environ.get(name, "")
-        for name in ("SLURM_JOB_GRES", "SLURM_GPUS", "SLURM_JOB_CONSTRAINTS")
-    )
     try:
+        allocation = read_slurm_job_record(os.environ.get("SLURM_JOB_ID", ""), _run_scontrol)
         report = execute_bounded_preflight(
             revision=args.revision,
             allocation_text=allocation,
@@ -71,6 +75,21 @@ def main(argv: list[str] | None = None, loader=None) -> int:
     write_json(args.output, report)
     print("PASS G02", flush=True)
     return 0
+
+
+def _run_scontrol(argv: list[str]) -> dict[str, object]:
+    completed = subprocess.run(
+        list(argv),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return {
+        "returncode": completed.returncode,
+        "stderr": completed.stderr,
+        "stdout": completed.stdout,
+    }
 
 
 def generation_request() -> dict[str, object]:

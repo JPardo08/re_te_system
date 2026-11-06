@@ -655,7 +655,7 @@ def execute_bounded_preflight(
     if not grant_enabled(G02_ENV):
         raise GemmaPreflightNotAuthorized("G02 grant is missing")
     assert_revision_approved(revision)
-    _assert_l40s_allocation(allocation_text)
+    allocation = _assert_l40s_allocation(allocation_text)
     verification = verify_snapshot_directory(snapshot_dir)
     if verification["verified"] is not True:
         raise GemmaWeightFormatError("; ".join(verification["errors"]))
@@ -671,6 +671,7 @@ def execute_bounded_preflight(
     report = preflight_plan()
     report["weights_loaded"] = True
     report["revision_approved"] = True
+    report["allocation"] = allocation
     report["load"] = {
         "dtype": PROPOSED_DTYPE,
         "local_files_only": True,
@@ -824,14 +825,249 @@ def _version_at_least(version: str, minimum: tuple[int, int, int]) -> bool:
     return tuple(numbers[:3]) >= minimum
 
 
-def _assert_l40s_allocation(allocation_text: str) -> None:
-    lowered = allocation_text.lower()
-    if "a100" in lowered:
-        raise GemmaAllocationError("A100 is refused")
-    if "l40s" not in lowered:
-        raise GemmaAllocationError("G02 requires an explicit gpu:l40s allocation")
-    if "gpu:1" in lowered and "l40s" not in lowered:
-        raise GemmaAllocationError("generic gpu:1 allocation is refused")
+_BARE_TRES_NAMES = frozenset({"billing", "cpu", "energy", "mem", "node"})
+_ALLOCATION_FIELDS = ("AllocTRES", "Gres", "ReqTRES", "TresPerNode")
+
+
+def read_slurm_job_record(
+    job_id: str,
+    runner: Callable[[Sequence[str]], Mapping[str, Any]],
+) -> str:
+    """Read one job from scontrol. The job name is not allocation evidence."""
+    if not isinstance(job_id, str) or not job_id.isdigit():
+        raise GemmaAllocationError(
+            "SLURM_JOB_ID is missing or not numeric, so AllocTRES cannot be read"
+        )
+    argv = ["scontrol", "-o", "show", "job", job_id]
+    result = runner(argv)
+    returncode = int(result.get("returncode", 1))
+    stdout = str(result.get("stdout") or "")
+    stderr = str(result.get("stderr") or "")
+    if returncode != 0 or not stdout.strip():
+        detail = stderr.strip() or stdout.strip() or "no output"
+        raise GemmaAllocationError(
+            f"scontrol could not read AllocTRES for job {job_id}: {detail}"
+        )
+    return stdout
+
+
+def _assert_l40s_allocation(allocation_text: str) -> dict[str, Any]:
+    """Accept only AllocTRES evidence of exactly one L40S.
+
+    A job name, a sbatch request, or the letters l40s in another variable are
+    not evidence. Other GPU fields in the same record must describe that same
+    assignment.
+    """
+    fields = _allocation_fields(allocation_text)
+    assigned = _gpus_in_field(fields["AllocTRES"], "AllocTRES")
+    if not assigned:
+        raise GemmaAllocationError(
+            f"AllocTRES does not assign a GPU: {fields['AllocTRES']}"
+        )
+    _require_one_l40s(assigned, "AllocTRES")
+    for source in ("ReqTRES", "TresPerNode", "Gres"):
+        if source not in fields:
+            continue
+        other = _gpus_in_field(fields[source], source)
+        if not other:
+            if source == "ReqTRES":
+                raise GemmaAllocationError(
+                    "allocation metadata disagrees: "
+                    f"AllocTRES assigns {_format_gpu(assigned)}; ReqTRES does not assign a GPU"
+                )
+            continue
+        if _gpu_key(other) != _gpu_key(assigned):
+            message = (
+                "allocation metadata disagrees: "
+                f"AllocTRES assigns {_format_gpu(assigned)}; "
+                f"{source} assigns {_format_gpu(other)}"
+            )
+            if any(gpu_type is not None and gpu_type.lower() == "a100" for gpu_type, _count in other):
+                message = "A100 is refused; " + message
+            raise GemmaAllocationError(message)
+    return {
+        "count": 1,
+        "gpu": "gres/gpu:l40s=1",
+        "source": "AllocTRES",
+    }
+
+
+def _allocation_fields(allocation_text: str) -> dict[str, str]:
+    stripped = allocation_text.strip()
+    if not stripped:
+        raise GemmaAllocationError("AllocTRES is missing; the allocation text is empty")
+    if "AllocTRES=" in stripped or stripped.startswith("JobId=") or "JobName=" in stripped:
+        fields = {
+            key: value
+            for key, value in _scontrol_pairs(stripped)
+            if key in _ALLOCATION_FIELDS
+        }
+        if "AllocTRES" not in fields:
+            raise GemmaAllocationError(
+                "SLURM job record has no AllocTRES; a job name or an unrelated "
+                "l40s string is not an allocation"
+            )
+        return fields
+    if _is_bare_tres(stripped):
+        return {"AllocTRES": stripped}
+    raise GemmaAllocationError(
+        "AllocTRES is missing; the text does not contain an AllocTRES field"
+    )
+
+
+def _scontrol_pairs(text: str) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    for token in text.split():
+        if "=" not in token:
+            continue
+        key, value = token.split("=", 1)
+        pairs.append((key, value))
+    return pairs
+
+
+def _is_bare_tres(text: str) -> bool:
+    if " " in text or "gres/gpu" not in text or "=" not in text:
+        return False
+    for part in text.split(","):
+        if "=" not in part:
+            return False
+        name = part.split("=", 1)[0]
+        if name not in _BARE_TRES_NAMES and not name.startswith("gres/"):
+            return False
+    return True
+
+
+def _gpus_in_field(value: str, source: str) -> list[tuple[str | None, int]]:
+    cleaned = value.strip()
+    if cleaned in {"", "(null)", "N/A"}:
+        return []
+    if "=" in cleaned:
+        found = _gpus_from_tres(cleaned, source)
+    else:
+        found = _gpus_from_colon_list(cleaned, source)
+    return _collapse_gpu_aggregate(found, source)
+
+
+def _gpus_from_tres(value: str, source: str) -> list[tuple[str | None, int]]:
+    found: list[tuple[str | None, int]] = []
+    mentioned = False
+    for part in value.split(","):
+        piece = part.strip()
+        if not piece:
+            continue
+        if "=" not in piece:
+            raise GemmaAllocationError(f"cannot parse GPU assignment from {source}: {value!r}")
+        name, raw_count = piece.split("=", 1)
+        if name == "gres/gpu":
+            mentioned = True
+            found.append((None, _gpu_count(raw_count, source, piece)))
+        elif name.startswith("gres/gpu:"):
+            mentioned = True
+            gpu_type = name[len("gres/gpu:") :]
+            if not gpu_type or ":" in gpu_type or "/" in gpu_type:
+                raise GemmaAllocationError(f"cannot parse GPU assignment from {source}: {value!r}")
+            found.append((gpu_type, _gpu_count(raw_count, source, piece)))
+    if mentioned:
+        return found
+    if "gres/gpu" in value or "gpu:" in value:
+        raise GemmaAllocationError(f"cannot parse GPU assignment from {source}: {value!r}")
+    return []
+
+
+def _gpus_from_colon_list(value: str, source: str) -> list[tuple[str | None, int]]:
+    cleaned = _without_parentheticals(value)
+    if "gpu" not in cleaned.lower():
+        return []
+    found: list[tuple[str | None, int]] = []
+    for piece in cleaned.split(","):
+        item = piece.strip()
+        if not item or "gpu" not in item.lower():
+            continue
+        bits = [bit for bit in item.split(":") if bit != ""]
+        if bits and bits[0].lower() == "gres":
+            bits = bits[1:]
+        if not bits or bits[0].lower() not in {"gpu", "gres/gpu"}:
+            raise GemmaAllocationError(f"cannot parse GPU assignment from {source}: {value!r}")
+        rest = bits[1:]
+        if len(rest) == 1 and rest[0].isdigit():
+            found.append((None, int(rest[0])))
+        elif len(rest) == 2 and rest[1].isdigit() and rest[0]:
+            found.append((rest[0], int(rest[1])))
+        else:
+            raise GemmaAllocationError(f"cannot parse GPU assignment from {source}: {value!r}")
+    if not found:
+        raise GemmaAllocationError(f"cannot parse GPU assignment from {source}: {value!r}")
+    return found
+
+
+def _without_parentheticals(value: str) -> str:
+    while "(" in value and ")" in value:
+        start = value.find("(")
+        end = value.find(")", start)
+        if end < 0:
+            break
+        value = value[:start] + value[end + 1 :]
+    return value.strip()
+
+
+def _gpu_count(raw: str, source: str, piece: str) -> int:
+    text = raw.strip()
+    if not text.isdigit():
+        raise GemmaAllocationError(f"{source} GPU count is not an integer: {piece}")
+    return int(text)
+
+
+def _collapse_gpu_aggregate(
+    items: list[tuple[str | None, int]],
+    source: str,
+) -> list[tuple[str | None, int]]:
+    """Keep typed devices. Slurm also reports their sum as gres/gpu=N.
+
+    That total is not another device. A total that does not match the typed
+    devices is contradictory. Untyped gres/gpu alone stays untyped.
+    """
+    typed = [(gpu_type, count) for gpu_type, count in items if gpu_type is not None]
+    untyped_total = sum(count for gpu_type, count in items if gpu_type is None)
+    if untyped_total == 0 or not typed:
+        return items
+    typed_total = sum(count for _gpu_type, count in typed)
+    if untyped_total != typed_total:
+        raise GemmaAllocationError(
+            "allocation metadata disagrees: "
+            f"{source} assigns {_format_gpu(items)}; "
+            f"gres/gpu={untyped_total} does not equal the typed total {typed_total}"
+        )
+    return typed
+
+
+def _require_one_l40s(items: list[tuple[str | None, int]], source: str) -> None:
+    rendered = _format_gpu(items)
+    if any(gpu_type is not None and gpu_type.lower() == "a100" for gpu_type, _count in items):
+        raise GemmaAllocationError(f"A100 is refused; {source} assigns {rendered}")
+    if any(gpu_type is None for gpu_type, _count in items):
+        raise GemmaAllocationError(
+            f"{source} assigns untyped {rendered}; G02 requires exactly one gres/gpu:l40s"
+        )
+    if any(gpu_type is None or gpu_type.lower() != "l40s" for gpu_type, _count in items):
+        raise GemmaAllocationError(
+            f"{source} assigns {rendered}; G02 requires exactly one gres/gpu:l40s"
+        )
+    total = sum(count for _gpu_type, count in items)
+    if total != 1 or len(items) != 1:
+        raise GemmaAllocationError(f"{source} assigns {rendered}; G02 requires exactly one L40S")
+
+
+def _format_gpu(items: Sequence[tuple[str | None, int]]) -> str:
+    return ",".join(
+        f"gres/gpu={count}" if gpu_type is None else f"gres/gpu:{gpu_type}={count}"
+        for gpu_type, count in items
+    )
+
+
+def _gpu_key(items: Sequence[tuple[str | None, int]]) -> tuple[tuple[str, int], ...]:
+    return tuple(
+        sorted(("untyped" if gpu_type is None else gpu_type.lower(), count) for gpu_type, count in items)
+    )
 
 
 def _terminate(process: subprocess.Popen[str]) -> None:
