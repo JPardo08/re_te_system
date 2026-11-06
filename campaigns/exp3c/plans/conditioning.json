@@ -1770,7 +1770,7 @@
         },
         {
           "code": "channel_separator_unverified",
-          "evidence": "The published 12B channel pattern has not been compared with the candidate chat template."
+          "evidence": "CESVIMA saw one difference against v1: a leading <bos>. v2 adds that marker. Exact equality with the snapshot processor has not been repeated, and this checkout does not load it."
         },
         {
           "code": "vram_unverified",

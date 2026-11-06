@@ -14,6 +14,7 @@ from re_te_system.controlled_experiment.gemma4 import (
     CANDIDATE_REVISION,
     CHANNEL_CLOSE,
     CHANNEL_OPEN,
+    BOS_TOKEN,
     COPY_CHUNK_BYTES,
     ESTIMATED_BF16_WEIGHT_BYTES,
     G01_ENV,
@@ -21,6 +22,7 @@ from re_te_system.controlled_experiment.gemma4 import (
     MODEL_ID,
     GemmaAcquireNotAuthorized,
     GemmaAllocationError,
+    GemmaChannelError,
     GemmaContextBudgetError,
     GemmaDuplicatePublication,
     GemmaGoldAccessRefused,
@@ -37,10 +39,14 @@ from re_te_system.controlled_experiment.gemma4 import (
     assert_revision_approved,
     assess_prompt_budget,
     classify_runtime_failure,
+    PRIOR_SERIALIZATION_ID,
+    SERIALIZATION_ID,
+    encode_serialized_turn,
     execute_bounded_preflight,
     preflight_decoding_contract,
     preflight_plan,
     PROPOSED_DTYPE,
+    paired_condition_identity,
     official_layout_errors,
     publish_snapshot,
     readiness_report,
@@ -213,8 +219,10 @@ def test_serialization_uses_shell_without_thinking_or_truncation() -> None:
     text = "Invented preflight sentence."
     rendered = render_controlled_prompt("C0", text)
     serialized = serialize_text_turn(rendered, enable_thinking=False)
+    assert serialized.startswith(BOS_TOKEN + "<|turn>user\n")
+    assert serialized.count(BOS_TOKEN) == 1
     assert rendered in serialized
-    assert serialized.endswith(CHANNEL_OPEN + CHANNEL_CLOSE)
+    assert serialized.endswith("<turn|>\n<|turn>model\n" + CHANNEL_OPEN + CHANNEL_CLOSE)
     assert render_serialized_turn("C1", text).count(text) == 1
     try:
         serialize_text_turn(rendered, enable_thinking=True)
@@ -239,6 +247,108 @@ def test_serialization_uses_shell_without_thinking_or_truncation() -> None:
         pass
     else:
         raise AssertionError("truncated tokenization was accepted")
+
+
+def test_serialized_turn_keeps_one_bos_and_shared_shell() -> None:
+    from re_te_system.controlled_experiment.contracts import sha256_text
+    from re_te_system.controlled_experiment.gemma4 import count_tokens_untruncated
+
+    text = "Invented preflight sentence."
+    rendered = render_controlled_prompt("C0", text)
+    serialized = serialize_text_turn(rendered, enable_thinking=False)
+    body = serialized[len(BOS_TOKEN) :]
+    assert body == (
+        "<|turn>user\n" + rendered + "<turn|>\n<|turn>model\n" + CHANNEL_OPEN + CHANNEL_CLOSE
+    )
+    assert serialized.count(BOS_TOKEN) == 1
+    c0 = render_serialized_turn("C0", text)
+    c1 = render_serialized_turn("C1", text)
+    assert c0.startswith(BOS_TOKEN + "<|turn>user\n") and c1.startswith(BOS_TOKEN + "<|turn>user\n")
+    assert c0.count(BOS_TOKEN) == 1 and c1.count(BOS_TOKEN) == 1
+    assert c0.endswith(CHANNEL_OPEN + CHANNEL_CLOSE) and c1.endswith(CHANNEL_OPEN + CHANNEL_CLOSE)
+    identity = paired_condition_identity(text)
+    assert identity["shell_id"] == "common-instruction-shell-v2"
+    assert identity["c0_prompt_sha256"] != identity["c1_prompt_sha256"]
+    assert sha256_text(c0) == identity["c0_serialized_sha256"]
+    assert sha256_text(c1) == identity["c1_serialized_sha256"]
+    assert SERIALIZATION_ID == "gemma4-12b-it-text-user-thinking-off-v2"
+    assert PRIOR_SERIALIZATION_ID == "gemma4-12b-it-text-user-thinking-off-v1"
+    assert readiness_report()["serialization_id"] == SERIALIZATION_ID
+    assert readiness_report()["prior_serialization_id"] == PRIOR_SERIALIZATION_ID
+    try:
+        serialize_text_turn(rendered, enable_thinking=True)
+    except GemmaThinkingNotAuthorized:
+        pass
+    else:
+        raise AssertionError("thinking mode was accepted")
+    try:
+        serialize_text_turn("")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("empty prompt was serialized")
+    try:
+        serialize_text_turn(BOS_TOKEN + "already")
+    except ValueError as exc:
+        assert BOS_TOKEN in str(exc)
+    else:
+        raise AssertionError("a prompt that already contained bos was serialized")
+    try:
+        render_serialized_turn("C0", "datasets/teresia_hohfeld/canonical/documents.jsonl")
+    except GemmaGoldAccessRefused:
+        pass
+    else:
+        raise AssertionError("gold path was rendered")
+
+    class OneBos:
+        bos_token_id = 2
+
+        def __call__(self, *, text: str, add_special_tokens: bool = True, truncation: bool = False, **kwargs):
+            assert add_special_tokens is False
+            assert truncation is False
+            assert text.startswith(BOS_TOKEN) and not text.startswith(BOS_TOKEN + BOS_TOKEN)
+            ids = [self.bos_token_id, 3, 4, 5]
+            if kwargs.get("return_tensors") == "pt":
+                return {"input_ids": [ids]}
+            return {"input_ids": ids}
+
+    encoded = encode_serialized_turn(OneBos(), serialized, return_tensors="pt")
+    assert encoded["input_ids"][0][0] == 2 and encoded["input_ids"][0][1] != 2
+    assert count_tokens_untruncated(OneBos(), serialized) == 4
+
+    class DoubleBos:
+        bos_token_id = 2
+
+        def __call__(self, *, text: str, add_special_tokens: bool = False, **_kwargs):
+            del text, add_special_tokens
+            return {"input_ids": [self.bos_token_id, self.bos_token_id, 9]}
+
+    try:
+        encode_serialized_turn(DoubleBos(), serialized)
+    except GemmaChannelError as exc:
+        assert "single leading BOS" in str(exc)
+    else:
+        raise AssertionError("a second BOS token was accepted")
+
+    class PrefixedBos:
+        bos_token_id = 2
+
+        def __call__(self, *, text: str, add_special_tokens: bool = False, **_kwargs):
+            assert text.startswith(BOS_TOKEN)
+            ids = [self.bos_token_id, 3, 4]
+            if add_special_tokens:
+                ids = [self.bos_token_id, *ids]
+            return {"input_ids": ids}
+
+    doubled = PrefixedBos()(text=serialized, add_special_tokens=True)
+    assert doubled["input_ids"][:2] == [2, 2]
+    assert count_tokens_untruncated(PrefixedBos(), serialized) == 3
+    try:
+        encode_serialized_turn(PrefixedBos(), serialized, add_special_tokens=True)
+    except GemmaChannelError as exc:
+        assert "already contains <bos>" in str(exc)
+    else:
+        raise AssertionError("add_special_tokens=True was accepted")
 
 
 def test_budget_timeout_and_runtime_classification() -> None:
@@ -940,6 +1050,7 @@ def _run_all() -> None:
     test_acquisition_grant_is_independent_of_the_identity_pin()
     test_channel_separation_and_tsv_do_not_repair_output()
     test_serialization_uses_shell_without_thinking_or_truncation()
+    test_serialized_turn_keeps_one_bos_and_shared_shell()
     test_budget_timeout_and_runtime_classification()
     test_commands_and_registry_stay_closed()
     with tempfile.TemporaryDirectory() as directory:

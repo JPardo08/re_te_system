@@ -25,6 +25,7 @@ from re_te_system.controlled_experiment.gemma4 import (
     GemmaPreflightNotAuthorized,
     GemmaRevisionNotApproved,
     GemmaWeightFormatError,
+    encode_serialized_turn,
     execute_bounded_preflight,
     preflight_decoding_contract,
     preflight_plan,
@@ -127,6 +128,11 @@ def _load_local_safetensors(**kwargs: object) -> dict[str, object]:
         raise GemmaChannelError(
             "the loaded processor template does not match the published 12B reconstruction"
         )
+    encoded = encode_serialized_turn(
+        processor,
+        serialized,
+        return_tensors="pt",
+    )
     model = Gemma4UnifiedForConditionalGeneration.from_pretrained(
         snapshot,
         local_files_only=True,
@@ -134,7 +140,6 @@ def _load_local_safetensors(**kwargs: object) -> dict[str, object]:
     )
     model.to("cuda:0")
     model.eval()
-    encoded = processor(text=serialized, return_tensors="pt", truncation=False)
     tensors = {key: value.to("cuda:0") for key, value in encoded.items() if hasattr(value, "to")}
     input_len = int(tensors["input_ids"].shape[-1])
     if input_len + int(contract.max_new_tokens) > DECLARED_NATIVE_CONTEXT_LENGTH:

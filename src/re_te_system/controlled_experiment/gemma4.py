@@ -48,7 +48,9 @@ PROPOSED_DTYPE = "bfloat16"
 ESTIMATED_BF16_WEIGHT_BYTES = DECLARED_PARAMETER_COUNT * 2
 INCOMPATIBLE_INFERENCE_TRANSFORMERS = "4.57.6"
 MINIMUM_TRANSFORMERS = (5, 10, 1)
-SERIALIZATION_ID = "gemma4-12b-it-text-user-thinking-off-v1"
+BOS_TOKEN = "<bos>"
+PRIOR_SERIALIZATION_ID = "gemma4-12b-it-text-user-thinking-off-v1"
+SERIALIZATION_ID = "gemma4-12b-it-text-user-thinking-off-v2"
 CHANNEL_POLICY_ID = "gemma4-12b-thought-channel-v1"
 CHANNEL_OPEN = "<|channel>thought\n"
 CHANNEL_CLOSE = "<channel|>"
@@ -202,20 +204,30 @@ def grant_enabled(name: str) -> bool:
 
 
 def serialize_text_turn(rendered_prompt: str, *, enable_thinking: bool = False) -> str:
-    """Published 12B text-turn pattern. It is not yet checked against the candidate template."""
+    """One user turn with thinking off and a single leading ``<bos>``.
+
+    CESVIMA observed that the approved processor string was the v1
+    reconstruction plus that prefix. ``PRIOR_SERIALIZATION_ID`` names v1.
+    Exact equality with the snapshot processor still has to be repeated there.
+    """
     if not isinstance(rendered_prompt, str) or rendered_prompt == "":
         raise ValueError("rendered prompt must be a non-empty string")
     if enable_thinking:
         raise GemmaThinkingNotAuthorized(
             "controlled serialization keeps thinking off; the answer must be TSV"
         )
-    return (
+    if BOS_TOKEN in rendered_prompt:
+        raise ValueError("rendered prompt already contains <bos>")
+    body = (
         "<|turn>user\n"
         + rendered_prompt
         + "<turn|>\n<|turn>model\n"
         + CHANNEL_OPEN
         + CHANNEL_CLOSE
     )
+    serialized = BOS_TOKEN + body
+    assert_single_leading_bos_text(serialized)
+    return serialized
 
 
 def render_serialized_turn(condition: str, text: str) -> str:
@@ -292,8 +304,67 @@ def transport_and_parse(
     }
 
 
+def assert_single_leading_bos_text(text: str) -> None:
+    """The serialized string carries one leading ``<bos>`` and no later copy."""
+    if not isinstance(text, str) or not text.startswith(BOS_TOKEN + "<|turn>user\n"):
+        raise GemmaChannelError("serialized turn is missing the single leading <bos>")
+    if text.startswith(BOS_TOKEN + BOS_TOKEN) or text.count(BOS_TOKEN) != 1:
+        raise GemmaChannelError("serialized turn contains more than one <bos>")
+
+
+def encode_serialized_turn(tokenizer: Any, text: str, **kwargs: Any) -> Mapping[str, Any]:
+    """Tokenize a turn that already contains ``<bos>`` without adding another."""
+    assert_single_leading_bos_text(text)
+    if kwargs.get("add_special_tokens") not in (None, False):
+        raise GemmaChannelError(
+            "refusing to add special tokens to a string that already contains <bos>"
+        )
+    kwargs["add_special_tokens"] = False
+    kwargs.setdefault("truncation", False)
+    encoded = tokenizer(text=text, **kwargs)
+    if not isinstance(encoded, Mapping):
+        raise GemmaChannelError("tokenizer did not return a mapping")
+    assert_no_extra_bos_token(encoded, _bos_token_id(tokenizer))
+    return encoded
+
+
+def assert_no_extra_bos_token(encoded: Mapping[str, Any], bos_token_id: int | None) -> None:
+    if not isinstance(bos_token_id, int):
+        raise GemmaChannelError(
+            "bos_token_id is missing; refusing to accept tokenization of a string that already contains <bos>"
+        )
+    ids = _flat_input_ids(encoded.get("input_ids"))
+    if len(ids) < 2 or ids[0] != bos_token_id or ids[1] == bos_token_id:
+        raise GemmaChannelError(
+            "tokenization of a string that already contains <bos> did not keep a single leading BOS token"
+        )
+
+
+def _bos_token_id(tokenizer: Any) -> int | None:
+    direct = getattr(tokenizer, "bos_token_id", None)
+    if isinstance(direct, int):
+        return direct
+    nested = getattr(getattr(tokenizer, "tokenizer", None), "bos_token_id", None)
+    if isinstance(nested, int):
+        return nested
+    return None
+
+
+def _flat_input_ids(ids: Any) -> list[Any]:
+    if hasattr(ids, "tolist"):
+        ids = ids.tolist()
+    while isinstance(ids, list) and ids and isinstance(ids[0], list):
+        ids = ids[0]
+    if not isinstance(ids, list):
+        raise GemmaChannelError("encoded input_ids are missing")
+    return ids
+
+
 def count_tokens_untruncated(tokenizer: Any, text: str) -> int:
-    encoded = tokenizer(text, add_special_tokens=True, truncation=False, return_attention_mask=False)
+    if isinstance(text, str) and text.startswith(BOS_TOKEN):
+        encoded = encode_serialized_turn(tokenizer, text, return_attention_mask=False)
+    else:
+        encoded = tokenizer(text, add_special_tokens=True, truncation=False, return_attention_mask=False)
     if not isinstance(encoded, Mapping):
         raise GemmaSilentTruncationRefused("tokenizer did not return a mapping")
     if encoded.get("overflowing_tokens") or encoded.get("truncation") is True:
@@ -368,6 +439,7 @@ def readiness_report() -> dict[str, Any]:
         "required_architecture": ARCHITECTURE,
         "result_role": RESULT_ROLE,
         "scientific_ready": False,
+        "prior_serialization_id": PRIOR_SERIALIZATION_ID,
         "serialization_id": SERIALIZATION_ID,
         "stage": "G00",
         "vram_bytes_measured": None,
