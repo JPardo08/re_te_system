@@ -1,7 +1,8 @@
 #!/bin/bash -l
-# G01 acquisition. CPU only. The catalog revision is not passed as an approval.
-# Operator must export GEMMA_REQUESTED_REVISION. The Python gate still refuses
-# any revision that is not in the empty approved set.
+# G01 acquisition. CPU only. The identity pin is
+# 707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7. That pin does not download by
+# itself: GEMMA_G01_ACQUIRE_AUTHORIZED=1 is still required, and this job
+# unsets the G02 grant. Any other revision is refused.
 #SBATCH --job-name=p3-g01-gemma-acquire
 #SBATCH --partition=standard
 #SBATCH --ntasks=1

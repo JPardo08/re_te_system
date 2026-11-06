@@ -35,7 +35,7 @@ def main(argv: list[str] | None = None) -> int:
             "G00 runtime is not compatible: " + "; ".join(report["runtime_blockers"]),
             code=2,
         )
-    if report["scientific_ready"] is not False or report["candidate_revision_approved"] is not False:
+    if report["scientific_ready"] is not False:
         fail("G00 cannot certify scientific readiness")
     if report["authorizes_later_stages"] != {"G01": False, "G02": False, "G03": False, "G04": False}:
         fail("G00 must not authorize a later stage")

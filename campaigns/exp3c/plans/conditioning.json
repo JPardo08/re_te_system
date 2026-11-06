@@ -63,7 +63,7 @@
     "common-instruction-shell-v2 is implemented in re_te_benchmark and consumed by the controlled-experiment harness. C0 and C1 payloads exist. Preparing them does not authorize execution, and the J21 invented-text smoke does not authorize Gold inference.",
     "Neither backbone is selected by being listed here.",
     "C2 stays PARTIAL. C3 stays NOT_READY and NOT_EXECUTABLE. C3-NL does not authorize C3.",
-    "G00-G02 name the Gemma 4 12B IT technical jobs. The catalog revision is a candidate, not an approved pin. They are outside submit_train_first.sh and do not authorize Gold."
+    "G00-G05 stay outside submit_train_first.sh. The Gemma revision 707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7 is an identity pin only. It does not authorize acquisition, GPU load, or Gold."
   ],
   "tasks": [
     {
@@ -1615,7 +1615,7 @@
       "split": null,
       "condition": null,
       "protocol_id": null,
-      "summary": "G00 checks the instruction-tuned Gemma identity and isolated runtime before any GPU reservation. The catalog revision is not approved here.",
+      "summary": "G00 checks the instruction-tuned Gemma identity and isolated runtime before any GPU reservation. The identity pin does not authorize G01-G04.",
       "inputs": [
         "google/gemma-4-12B-it",
         "candidate revision 707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7"
@@ -1638,7 +1638,7 @@
         "not selected by submit_train_first.sh",
         "do not download weights",
         "do not reserve a GPU",
-        "do not treat the candidate revision as an approved pin"
+        "an identity pin is not scientific approval and does not authorize G01-G04"
       ],
       "acceptance_criteria": [
         "the report names google/gemma-4-12B-it and refuses google/gemma-4-12B",
@@ -1671,9 +1671,9 @@
       "split": null,
       "condition": null,
       "protocol_id": null,
-      "summary": "G01 would acquire one approved revision and refuse to overwrite an accepted snapshot. No revision is approved in this checkout.",
+      "summary": "G01 can acquire only 707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7 and refuses to overwrite an accepted snapshot. The identity pin does not start the download.",
       "inputs": [
-        "an approved 40-character revision, which this registry does not contain"
+        "GEMMA_G01_ACQUIRE_AUTHORIZED=1 plus the exact revision 707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7"
       ],
       "outputs": [
         "sha256 and byte size for each snapshot file"
@@ -1695,16 +1695,16 @@
         "do not overwrite an accepted checkpoint"
       ],
       "acceptance_criteria": [
-        "the candidate revision is refused",
-        "a scheduler COMPLETED state would not approve the revision"
+        "acquisition still requires GEMMA_G01_ACQUIRE_AUTHORIZED and does not load weights",
+        "a scheduler COMPLETED state would not by itself authorize G02 or Gold"
       ],
       "preparation_status": "BLOCKED",
       "authorization": "not_authorized",
       "technical_block": true,
       "block_reasons": [
         {
-          "code": "revision_not_approved",
-          "evidence": "707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7 is only a catalog candidate. APPROVED_REVISIONS is empty."
+          "code": "acquisition_grant_not_implied",
+          "evidence": "707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7 is an identity pin. The pin does not set GEMMA_G01_ACQUIRE_AUTHORIZED and does not load the model."
         }
       ],
       "training": false,
@@ -1765,8 +1765,8 @@
       "technical_block": true,
       "block_reasons": [
         {
-          "code": "revision_not_approved",
-          "evidence": "G02 cannot load weights while the candidate revision is unapproved."
+          "code": "gpu_load_not_implied",
+          "evidence": "The identity pin does not authorize GPU load. G02 still requires its own grant, a local snapshot, and offline mode."
         },
         {
           "code": "channel_separator_unverified",
@@ -1829,15 +1829,15 @@
       ],
       "acceptance_criteria": [
         "technical_pass is not a scientific result",
-        "the candidate revision remains unapproved"
+        "the identity pin does not authorize the smoke"
       ],
       "preparation_status": "BLOCKED",
       "authorization": "not_authorized",
       "technical_block": true,
       "block_reasons": [
         {
-          "code": "revision_not_approved",
-          "evidence": "G03 cannot load weights while the candidate revision is unapproved."
+          "code": "smoke_grant_not_implied",
+          "evidence": "G03 still requires its own grant. The identity pin does not load weights or authorize G04."
         }
       ],
       "training": false,
@@ -1897,7 +1897,7 @@
       "block_reasons": [
         {
           "code": "gold_inference_closed",
-          "evidence": "G04_PHASE_LOCK is closed. Accredited G02 and G03 reports are absent, and no revision is approved."
+          "evidence": "G04_PHASE_LOCK is closed. Accredited G02 and G03 reports are absent. The identity pin does not open Gold."
         }
       ],
       "training": false,

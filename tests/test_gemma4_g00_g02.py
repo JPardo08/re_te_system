@@ -14,6 +14,7 @@ from re_te_system.controlled_experiment.gemma4 import (
     CANDIDATE_REVISION,
     CHANNEL_CLOSE,
     CHANNEL_OPEN,
+    COPY_CHUNK_BYTES,
     ESTIMATED_BF16_WEIGHT_BYTES,
     G01_ENV,
     G02_ENV,
@@ -23,11 +24,14 @@ from re_te_system.controlled_experiment.gemma4 import (
     GemmaDuplicatePublication,
     GemmaGoldAccessRefused,
     GemmaModelIdentityError,
+    GemmaPreflightNotAuthorized,
     GemmaRevisionNotApproved,
     GemmaSilentTruncationRefused,
     GemmaThinkingNotAuthorized,
+    GemmaWeightFormatError,
     GemmaWorkerTimeout,
     acquire_checkpoint,
+    acquisition_plan,
     assert_instruction_tuned,
     assert_revision_approved,
     assess_prompt_budget,
@@ -35,8 +39,11 @@ from re_te_system.controlled_experiment.gemma4 import (
     execute_bounded_preflight,
     preflight_decoding_contract,
     preflight_plan,
+    official_layout_errors,
     publish_snapshot,
     readiness_report,
+    sha256_file,
+    stream_copy,
     render_serialized_turn,
     run_bounded_command,
     scientific_decoding_contract,
@@ -102,16 +109,24 @@ def test_identity_rejects_base_and_unapproved_candidate() -> None:
         pass
     else:
         raise AssertionError("base checkpoint was accepted")
-    assert CANDIDATE_REVISION not in APPROVED_REVISIONS
+    assert APPROVED_REVISIONS == frozenset({CANDIDATE_REVISION})
+    assert_revision_approved(CANDIDATE_REVISION)
     try:
-        assert_revision_approved(CANDIDATE_REVISION)
+        assert_revision_approved("a" * 40)
     except GemmaRevisionNotApproved as exc:
-        assert "candidate" in str(exc)
+        assert CANDIDATE_REVISION in str(exc)
     else:
-        raise AssertionError("candidate revision was approved")
+        raise AssertionError("a different revision was approved")
     report = readiness_report()
     assert report["model_id"] == MODEL_ID
-    assert report["candidate_revision_approved"] is False
+    assert report["candidate_revision_approved"] is True
+    assert report["scientific_ready"] is False
+    assert report["authorizes_later_stages"] == {
+        "G01": False,
+        "G02": False,
+        "G03": False,
+        "G04": False,
+    }
     assert report["gold_inference_authorized"] is False
     assert report["ready_for_gpu_reservation"] is False
     assert report["weight_estimate"]["status"] == "estimate_not_measurement"
@@ -119,20 +134,28 @@ def test_identity_rejects_base_and_unapproved_candidate() -> None:
     assert report["dtype_policy"]["quantization"] == "refused"
 
 
-def test_acquisition_does_not_call_a_downloader_for_the_candidate() -> None:
+def test_acquisition_grant_is_independent_of_the_identity_pin() -> None:
     called: list[str] = []
 
     def downloader(model_id: str, revision: str) -> Path:
         called.append(revision)
         raise AssertionError(model_id)
 
-    os.environ[G01_ENV] = "1"
+    os.environ.pop(G01_ENV, None)
     try:
         acquire_checkpoint(MODEL_ID, CANDIDATE_REVISION, Path("/tmp/unused"), downloader)
     except GemmaAcquireNotAuthorized:
         pass
     else:
-        raise AssertionError("candidate acquisition was permitted")
+        raise AssertionError("the identity pin downloaded without the G01 grant")
+    assert called == []
+    os.environ[G01_ENV] = "1"
+    try:
+        acquire_checkpoint(MODEL_ID, "a" * 40, Path("/tmp/unused"), downloader)
+    except GemmaAcquireNotAuthorized:
+        pass
+    else:
+        raise AssertionError("a different revision was downloaded")
     finally:
         os.environ.pop(G01_ENV, None)
     assert called == []
@@ -268,7 +291,7 @@ def test_preflight_loader_is_not_called_without_approval(tmp_path: Path = None) 
         called.append(True)
         raise AssertionError("loader")
 
-    os.environ[G02_ENV] = "1"
+    os.environ.pop(G02_ENV, None)
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
     try:
@@ -278,12 +301,11 @@ def test_preflight_loader_is_not_called_without_approval(tmp_path: Path = None) 
             loader=loader,
             snapshot_dir=_snapshot(tmp_path / "snap"),
         )
-    except GemmaRevisionNotApproved:
+    except GemmaPreflightNotAuthorized:
         pass
     else:
-        raise AssertionError("unapproved preflight loaded weights")
+        raise AssertionError("the identity pin loaded weights without the G02 grant")
     finally:
-        os.environ.pop(G02_ENV, None)
         os.environ.pop("HF_HUB_OFFLINE", None)
         os.environ.pop("TRANSFORMERS_OFFLINE", None)
     assert called == []
@@ -331,6 +353,200 @@ def test_preflight_loader_is_not_called_without_approval(tmp_path: Path = None) 
     assert loaded["weights_loaded"] is True
 
 
+def _official_snapshot(root: Path) -> Path:
+    root.mkdir()
+    (root / "config.json").write_text(
+        json.dumps(
+            {
+                "_name_or_path": MODEL_ID,
+                "architectures": ["Gemma4UnifiedForConditionalGeneration"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "chat_template.jinja").write_text("template", encoding="utf-8")
+    (root / "tokenizer.json").write_text("{}", encoding="utf-8")
+    (root / "tokenizer_config.json").write_text("{}", encoding="utf-8")
+    (root / "processor_config.json").write_text("{}", encoding="utf-8")
+    (root / "generation_config.json").write_text("{}", encoding="utf-8")
+    payload = b"weight-bytes" * 20
+    (root / "model.safetensors").write_bytes(payload)
+    return root
+
+
+def test_streaming_publication_matches_bytes_and_stays_closed(tmp_path: Path = None) -> None:
+    import re_te_system.controlled_experiment.gemma4 as gemma4
+
+    if tmp_path is None:
+        raise AssertionError("tmp_path missing")
+    small = tmp_path / "small.bin"
+    small.write_bytes(b"abc")
+    large = tmp_path / "large.bin"
+    chunk = b"01234567"
+    large.write_bytes(chunk * 3 + b"tail")
+    previous_chunk = gemma4.COPY_CHUNK_BYTES
+    gemma4.COPY_CHUNK_BYTES = 8
+    try:
+        digest = __import__("hashlib").sha256
+        assert sha256_file(small, chunk_bytes=8)[0] == digest(b"abc").hexdigest()
+        assert large.stat().st_size > 8
+        assert sha256_file(large, chunk_bytes=8) == (
+            digest(chunk * 3 + b"tail").hexdigest(),
+            large.stat().st_size,
+        )
+        assert sha256_file(large, chunk_bytes=1)[0] == sha256_file(large, chunk_bytes=8)[0]
+        copied = tmp_path / "copied.bin"
+        stream_copy(large, copied, chunk_bytes=8)
+        assert sha256_file(copied) == sha256_file(large)
+    finally:
+        gemma4.COPY_CHUNK_BYTES = previous_chunk
+    assert COPY_CHUNK_BYTES >= 1024 * 1024
+
+    source = _official_snapshot(tmp_path / "official")
+    assert official_layout_errors(source) == []
+    verified = verify_snapshot_directory(source)
+    assert verified["verified"] is True
+    published = publish_snapshot(source, tmp_path / "models" / CANDIDATE_REVISION, CANDIDATE_REVISION)
+    destination = Path(published["destination"])
+    for record in verified["files"]:
+        dest = destination / record["relative_path"]
+        assert sha256_file(dest) == (record["sha256"], record["byte_size"])
+        assert dest.is_symlink() is False
+    marker = tmp_path / "models" / "accepted_revision.txt"
+    assert marker.read_text(encoding="utf-8").strip() == CANDIDATE_REVISION
+    again = verify_snapshot_directory(source)
+    assert [(item["relative_path"], item["sha256"], item["byte_size"]) for item in again["files"]] == [
+        (item["relative_path"], item["sha256"], item["byte_size"]) for item in verified["files"]
+    ]
+    locked = tmp_path / "locked" / "rev"
+    locked.mkdir(parents=True)
+    try:
+        publish_snapshot(source, locked, CANDIDATE_REVISION)
+    except GemmaDuplicatePublication:
+        pass
+    else:
+        raise AssertionError("an existing destination was overwritten")
+    assert list(locked.iterdir()) == []
+    real_verify = gemma4.verify_snapshot_directory
+
+    def escaped(path: Path) -> dict:
+        payload = real_verify(path)
+        payload["files"] = [
+            {"byte_size": 1, "relative_path": "../escape.bin", "sha256": "0" * 64}
+        ]
+        return payload
+
+    gemma4.verify_snapshot_directory = escaped
+    escape_root = tmp_path / "escape-parent"
+    try:
+        publish_snapshot(source, escape_root / CANDIDATE_REVISION, CANDIDATE_REVISION)
+    except GemmaWeightFormatError as exc:
+        assert "refusing to copy" in str(exc)
+    else:
+        raise AssertionError("a path escape was copied")
+    finally:
+        gemma4.verify_snapshot_directory = real_verify
+    assert not (escape_root / "accepted_revision.txt").exists()
+    assert not (tmp_path / "escape.bin").exists()
+    assert (escape_root / f".{CANDIDATE_REVISION}.partial").exists()
+    try:
+        publish_snapshot(source, tmp_path / "models" / "other", CANDIDATE_REVISION)
+    except GemmaDuplicatePublication:
+        pass
+    else:
+        raise AssertionError("second publication was accepted")
+    os.environ.pop("GEMMA_G00_READINESS_AUTHORIZED", None)
+    os.environ.pop(G01_ENV, None)
+    os.environ.pop(G02_ENV, None)
+    os.environ.pop("GEMMA_G03_SMOKE_AUTHORIZED", None)
+    os.environ.pop("GEMMA_G04_RUN_AUTHORIZED", None)
+    assert acquisition_plan(MODEL_ID, CANDIDATE_REVISION)["acquire_permitted"] is False
+    from re_te_system.controlled_experiment.gemma4 import launch_g04
+
+    try:
+        launch_g04({"revision_approved": True})
+    except Exception as exc:
+        assert "g04_phase_lock_closed" in str(exc)
+    else:
+        raise AssertionError("the identity pin opened G04")
+    assert published["storage"]["hardlinks"] == "not used"
+    assert published["storage"]["peak_extra_bytes_estimate"] == ESTIMATED_BF16_WEIGHT_BYTES * 2
+
+    interrupted = _official_snapshot(tmp_path / "interrupt-source")
+    calls = {"count": 0}
+    original = gemma4.stream_copy
+
+    def fail_midway(source_path: Path, destination_path: Path, *, chunk_bytes: int = COPY_CHUNK_BYTES) -> None:
+        calls["count"] += 1
+        if calls["count"] > 1:
+            raise RuntimeError("interrupted copy")
+        original(source_path, destination_path, chunk_bytes=chunk_bytes)
+
+    gemma4.stream_copy = fail_midway
+    staging = tmp_path / "fresh" / f".{CANDIDATE_REVISION}.partial"
+    try:
+        publish_snapshot(interrupted, tmp_path / "fresh" / CANDIDATE_REVISION, CANDIDATE_REVISION)
+    except RuntimeError as exc:
+        assert "interrupted" in str(exc)
+    else:
+        raise AssertionError("interrupted publication succeeded")
+    finally:
+        gemma4.stream_copy = original
+    assert not (tmp_path / "fresh" / "accepted_revision.txt").exists()
+    assert not (tmp_path / "fresh" / CANDIDATE_REVISION).exists()
+    assert staging.exists()
+    try:
+        publish_snapshot(interrupted, tmp_path / "fresh" / CANDIDATE_REVISION, CANDIDATE_REVISION)
+    except GemmaDuplicatePublication as exc:
+        assert "not deleted automatically" in str(exc)
+    else:
+        raise AssertionError("incomplete staging was overwritten")
+
+    calls_loader: list[dict] = []
+
+    def loader(**kwargs):
+        calls_loader.append(kwargs)
+        return {"weights_loaded": True}
+
+    os.environ.pop(G02_ENV, None)
+    try:
+        execute_bounded_preflight(
+            revision=CANDIDATE_REVISION,
+            allocation_text="gpu:l40s:1",
+            loader=loader,
+            snapshot_dir=destination,
+        )
+    except Exception as exc:
+        assert type(exc).__name__ == "GemmaPreflightNotAuthorized"
+    else:
+        raise AssertionError("G02 loaded without its grant")
+    assert calls_loader == []
+    os.environ[G02_ENV] = "1"
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    try:
+        loaded = execute_bounded_preflight(
+            revision=CANDIDATE_REVISION,
+            allocation_text="gpu:l40s:1",
+            loader=loader,
+            snapshot_dir=destination,
+        )
+    finally:
+        os.environ.pop(G02_ENV, None)
+        os.environ.pop("HF_HUB_OFFLINE", None)
+        os.environ.pop("TRANSFORMERS_OFFLINE", None)
+    assert calls_loader[0]["local_files_only"] is True
+    assert loaded["weights_loaded"] is True
+    try:
+        publish_snapshot(source, tmp_path / "base-dest" / "rev", "a" * 40)
+    except GemmaRevisionNotApproved:
+        pass
+    else:
+        raise AssertionError("base revision publication was accepted")
+    base = _snapshot(tmp_path / "base-model", name=BASE_MODEL_ID)
+    assert verify_snapshot_directory(base)["verified"] is False
+
+
 def _fake_gemma_venv(directory: Path, *, version: str | None, status: int) -> Path:
     python = directory / "bin" / "python"
     python.parent.mkdir(parents=True)
@@ -351,7 +567,9 @@ def test_g00_separates_runtime_compatibility_from_scientific_gaps(tmp_path: Path
         absent = readiness_report()
         assert absent["ready_for_gpu_reservation"] is False
         assert absent["runtime_blockers"] == ["gemma_venv_absent"]
-        assert "candidate_revision_not_approved" in absent["scientific_blockers"]
+        assert absent["candidate_revision_approved"] is True
+        assert "vram_unverified" in absent["scientific_blockers"]
+        assert "candidate_revision_not_approved" not in absent["scientific_blockers"]
 
         os.environ["GEMMA_VENV"] = str(_fake_gemma_venv(tmp_path / "old", version="4.57.6", status=0))
         old = readiness_report()
@@ -368,7 +586,7 @@ def test_g00_separates_runtime_compatibility_from_scientific_gaps(tmp_path: Path
         assert compatible["ready_for_gpu_reservation"] is True
         assert compatible["runtime_blockers"] == []
         assert compatible["scientific_ready"] is False
-        assert compatible["candidate_revision_approved"] is False
+        assert compatible["candidate_revision_approved"] is True
         assert compatible["eos_token_id"] is None and compatible["pad_token_id"] is None
         assert compatible["vram_bytes_measured"] is None
         assert "vram_unverified" in compatible["scientific_blockers"]
@@ -475,7 +693,7 @@ def test_cli_refuses_gold_and_candidate_download(tmp_path: Path = None) -> None:
                 "--model-id",
                 MODEL_ID,
                 "--revision",
-                CANDIDATE_REVISION,
+                "a" * 40,
                 "--destination",
                 str(tmp_path / "dest"),
                 "--report",
@@ -486,7 +704,7 @@ def test_cli_refuses_gold_and_candidate_download(tmp_path: Path = None) -> None:
     except SystemExit as exc:
         assert exc.code == 2
     else:
-        raise AssertionError("G01 downloaded the candidate")
+        raise AssertionError("G01 downloaded an unapproved revision")
     assert called == []
     try:
         g02_gemma_preflight.main(["--output", str(tmp_path / "g02.json"), "--revision", CANDIDATE_REVISION])
@@ -497,6 +715,8 @@ def test_cli_refuses_gold_and_candidate_download(tmp_path: Path = None) -> None:
     plan = json.loads((tmp_path / "g02.json").read_text(encoding="utf-8"))
     assert plan["executed"] is False
     assert plan["weights_loaded"] is False
+    assert plan["revision_approved"] is True
+    assert plan["gold_inference_authorized"] is False
     os.environ.pop("GEMMA_G00_READINESS_AUTHORIZED", None)
     os.environ.pop(G01_ENV, None)
     os.environ.pop("SCRATCH_ROOT", None)
@@ -507,18 +727,19 @@ def _run_all() -> None:
 
     os.environ.pop("GEMMA_VENV", None)
     test_identity_rejects_base_and_unapproved_candidate()
-    test_acquisition_does_not_call_a_downloader_for_the_candidate()
+    test_acquisition_grant_is_independent_of_the_identity_pin()
     test_channel_separation_and_tsv_do_not_repair_output()
     test_serialization_uses_shell_without_thinking_or_truncation()
     test_budget_timeout_and_runtime_classification()
     test_commands_and_registry_stay_closed()
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        for name in ("publish", "preflight", "cli"):
+        for name in ("publish", "preflight", "cli", "g00", "publish-stream"):
             (root / name).mkdir()
         test_publish_is_refused_twice_and_bins_are_not_loadable(root / "publish")
         test_preflight_loader_is_not_called_without_approval(root / "preflight")
         test_g00_separates_runtime_compatibility_from_scientific_gaps(root / "g00")
+        test_streaming_publication_matches_bytes_and_stays_closed(root / "publish-stream")
         test_cli_refuses_gold_and_candidate_download(root / "cli")
 
 

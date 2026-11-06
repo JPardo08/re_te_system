@@ -1,4 +1,8 @@
-"""G01: explicit Gemma acquisition. The catalog revision is not an approval."""
+"""G01: explicit Gemma acquisition.
+
+The approved revision is an identity pin. This script still downloads only
+when GEMMA_G01_ACQUIRE_AUTHORIZED=1, and it never loads the model.
+"""
 
 from __future__ import annotations
 

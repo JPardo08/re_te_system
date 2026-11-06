@@ -1,9 +1,9 @@
 """Gemma 4 12B instruction-tuned runtime for the controlled experiment.
 
-G00-G02 only. This module does not run a Gold campaign, does not approve the
-catalog revision, and does not download or load weights unless a caller passes
-an explicit downloader or loader after the gates have opened. Those gates are
-closed in this checkout: the candidate revision is not an approved pin.
+G00-G05 do not run a Gold campaign. The official revision is an identity pin
+only. Acquisition, GPU load, and Gold inference stay behind their own grants.
+Weights are hashed and copied in bounded chunks. Nothing downloads unless a
+caller passes an explicit downloader after the acquisition grant.
 
 The shared pieces are the shell renderer, context preflight, and TSV parser.
 Qwen3 token ids, phase locks, and weight-index checks are not reused.
@@ -29,7 +29,17 @@ from re_te_system.parsing.tsv import generation_issue, parse_tsv
 MODEL_ID = "google/gemma-4-12B-it"
 BASE_MODEL_ID = "google/gemma-4-12B"
 CANDIDATE_REVISION = "707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7"
-APPROVED_REVISIONS: frozenset[str] = frozenset()
+APPROVED_REVISIONS: frozenset[str] = frozenset({CANDIDATE_REVISION})
+COPY_CHUNK_BYTES = 8 * 1024 * 1024
+OFFICIAL_REVISION_FILES = (
+    "config.json",
+    "chat_template.jinja",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "processor_config.json",
+    "generation_config.json",
+    "model.safetensors",
+)
 ARCHITECTURE = "Gemma4UnifiedForConditionalGeneration"
 FAMILY = "Gemma4-unified"
 DECLARED_NATIVE_CONTEXT_LENGTH = 262144
@@ -58,7 +68,7 @@ GOLD_PATH_MARKERS = (
 
 
 class GemmaRevisionNotApproved(RuntimeError):
-    """The revision is recorded or unknown, and it is not an approved pin."""
+    """The revision is not the single approved instruction-tuned pin."""
 
 
 class GemmaModelIdentityError(RuntimeError):
@@ -165,12 +175,9 @@ def revision_is_approved(revision: str | None) -> bool:
 def assert_revision_approved(revision: str | None) -> None:
     if revision_is_approved(revision):
         return
-    if revision == CANDIDATE_REVISION:
-        raise GemmaRevisionNotApproved(
-            "catalog revision "
-            f"{CANDIDATE_REVISION} is a candidate, not an approved pin"
-        )
-    raise GemmaRevisionNotApproved(f"revision is not approved: {revision!r}")
+    raise GemmaRevisionNotApproved(
+        f"revision is not the approved instruction-tuned pin {CANDIDATE_REVISION}: {revision!r}"
+    )
 
 
 def assert_instruction_tuned(model_id: str) -> None:
@@ -335,7 +342,7 @@ def readiness_report() -> dict[str, Any]:
         "approved_revisions": sorted(APPROVED_REVISIONS),
         "base_model_id_refused": BASE_MODEL_ID,
         "candidate_revision": CANDIDATE_REVISION,
-        "candidate_revision_approved": False,
+        "candidate_revision_approved": revision_is_approved(CANDIDATE_REVISION),
         "channel_policy_id": CHANNEL_POLICY_ID,
         "channel_separator_verified": False,
         "chat_template_verified_against_candidate": False,
@@ -400,6 +407,7 @@ def acquisition_plan(model_id: str, revision: str) -> dict[str, Any]:
         "revision": revision,
         "revision_approved": revision_is_approved(revision),
         "stage": "G01",
+        "storage": acquisition_storage_plan(),
     }
 
 
@@ -420,18 +428,67 @@ def acquire_checkpoint(
     return published
 
 
+def acquisition_storage_plan() -> dict[str, Any]:
+    """Disk plan for one G01 run. Figures are estimates, not measured downloads."""
+    weight = ESTIMATED_BF16_WEIGHT_BYTES
+    return {
+        "cache_policy": "huggingface_hub blob cache may resume an incomplete download",
+        "hardlinks": "not used",
+        "peak_extra_bytes_estimate": weight * 2,
+        "published_copy": "regular files, symlink targets are dereferenced",
+        "resume_publish": "an incomplete staging directory is left in place and is not deleted",
+        "same_filesystem_rename": True,
+        "symlinks_in_published_tree": False,
+        "weight_bytes_estimate": weight,
+    }
+
+
+def sha256_file(path: Path, *, chunk_bytes: int = COPY_CHUNK_BYTES) -> tuple[str, int]:
+    """Hash one file without reading it into a single buffer."""
+    if chunk_bytes < 1:
+        raise ValueError("chunk_bytes must be positive")
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as handle:
+        while True:
+            block = handle.read(chunk_bytes)
+            if not block:
+                break
+            digest.update(block)
+            size += len(block)
+    return digest.hexdigest(), size
+
+
+def stream_copy(source: Path, destination: Path, *, chunk_bytes: int = COPY_CHUNK_BYTES) -> None:
+    """Copy bytes in bounded blocks. The destination is a new regular file."""
+    if chunk_bytes < 1:
+        raise ValueError("chunk_bytes must be positive")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with source.open("rb") as incoming, destination.open("xb") as outgoing:
+        while True:
+            block = incoming.read(chunk_bytes)
+            if not block:
+                break
+            outgoing.write(block)
+        outgoing.flush()
+        os.fsync(outgoing.fileno())
+
+
 def verify_snapshot_directory(path: Path) -> dict[str, Any]:
     root = Path(path)
     files: list[dict[str, Any]] = []
     for item in sorted(root.rglob("*")):
         if not item.is_file():
             continue
-        data = item.read_bytes()
+        relative = item.relative_to(root)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise GemmaWeightFormatError(f"snapshot path escapes its root: {relative}")
+        digest, size = sha256_file(item)
         files.append(
             {
-                "byte_size": len(data),
-                "relative_path": item.relative_to(root).as_posix(),
-                "sha256": hashlib.sha256(data).hexdigest(),
+                "byte_size": size,
+                "relative_path": relative.as_posix(),
+                "sha256": digest,
             }
         )
     errors: list[str] = []
@@ -476,32 +533,87 @@ def verify_snapshot_directory(path: Path) -> dict[str, Any]:
     }
 
 
+def official_layout_errors(root: Path) -> list[str]:
+    """Files observed on the approved Hub revision. Absence blocks publication of that pin."""
+    return [name for name in OFFICIAL_REVISION_FILES if not (root / name).is_file()]
+
+
 def publish_snapshot(source: Path, destination: Path, revision: str) -> dict[str, Any]:
     assert_revision_approved(revision)
-    verification = verify_snapshot_directory(source)
+    origin = Path(source)
+    verification = verify_snapshot_directory(origin)
     if verification["verified"] is not True:
         raise GemmaWeightFormatError("; ".join(verification["errors"]))
+    if revision == CANDIDATE_REVISION:
+        missing = official_layout_errors(origin)
+        if missing:
+            raise GemmaWeightFormatError("approved revision is missing " + ", ".join(missing))
     target = Path(destination)
-    marker = target.parent / "accepted_revision.txt"
-    if marker.exists() or (target.exists() and any(target.iterdir())):
+    parent = target.parent
+    marker = parent / "accepted_revision.txt"
+    staging = parent / f".{target.name}.partial"
+    if marker.exists() or target.exists():
         raise GemmaDuplicatePublication(
             f"refusing to overwrite an accepted Gemma checkpoint at {target}"
         )
-    target.mkdir(parents=True, exist_ok=False)
+    if staging.exists():
+        raise GemmaDuplicatePublication(
+            f"incomplete publication remains at {staging} and is not deleted automatically"
+        )
+    parent.mkdir(parents=True, exist_ok=True)
+    staging.mkdir(parents=False, exist_ok=False)
     for record in verification["files"]:
         relative = Path(record["relative_path"])
-        src = source / relative
-        dest = target / relative
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(src.read_bytes())
-    marker.write_text(revision + "\n", encoding="utf-8")
+        if relative.is_absolute() or ".." in relative.parts:
+            raise GemmaWeightFormatError(f"refusing to copy {relative}")
+        src = origin / relative
+        dest = staging / relative
+        if staging.resolve() not in dest.resolve().parents:
+            raise GemmaWeightFormatError(f"copy target escapes staging: {dest}")
+        stream_copy(src, dest)
+    published = verify_snapshot_directory(staging)
+    if not _same_file_records(verification["files"], published["files"]):
+        raise GemmaWeightFormatError("published bytes do not match the source snapshot")
+    _fsync_directory(staging)
+    os.rename(staging, target)
+    _fsync_directory(parent)
+    _write_acceptance_marker(marker, revision)
+    _fsync_directory(parent)
     return {
         "accepted_revision_file": str(marker),
         "destination": str(target),
         "duplicate_publication": False,
         "revision": revision,
+        "storage": acquisition_storage_plan(),
         "verification": verification,
     }
+
+
+def _same_file_records(left: Sequence[Mapping[str, Any]], right: Sequence[Mapping[str, Any]]) -> bool:
+    def key(record: Mapping[str, Any]) -> tuple[str, str, int]:
+        return (str(record["relative_path"]), str(record["sha256"]), int(record["byte_size"]))
+
+    return sorted(key(item) for item in left) == sorted(key(item) for item in right)
+
+
+def _fsync_directory(directory: Path) -> None:
+    """Durability of a directory entry on the destination filesystem."""
+    descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _write_acceptance_marker(marker: Path, revision: str) -> None:
+    temporary = marker.with_name(marker.name + ".partial")
+    if marker.exists() or temporary.exists():
+        raise GemmaDuplicatePublication(f"refusing to replace acceptance marker {marker}")
+    with temporary.open("x", encoding="utf-8") as handle:
+        handle.write(revision + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, marker)
 
 
 def preflight_plan() -> dict[str, Any]:
@@ -526,7 +638,7 @@ def preflight_plan() -> dict[str, Any]:
         "gold_inference_authorized": False,
         "local_files_only": True,
         "quantization": "refused",
-        "revision_approved": False,
+        "revision_approved": revision_is_approved(CANDIDATE_REVISION),
         "serialized_sha256": sha256_text(serialized),
         "stage": "G02",
         "weights_loaded": False,
