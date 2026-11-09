@@ -56,6 +56,8 @@ SERIALIZATION_ID = "gemma4-12b-it-text-user-thinking-off-v3"
 CHANNEL_POLICY_ID = "gemma4-12b-thought-channel-v1"
 CHANNEL_OPEN = "<|channel>thought\n"
 CHANNEL_CLOSE = "<channel|>"
+TURN_END = "<turn|>"
+TRANSPORT_POLICY_ID = "gemma4-one-terminal-turn-end"
 PREFLIGHT_MAX_NEW_TOKENS = 32
 INVENTED_PREFLIGHT_TEXT = (
     "A runtime preflight records one invented sentence that is not a statute."
@@ -242,6 +244,30 @@ def serialize_text_turn(rendered_prompt: str, *, enable_thinking: bool = False) 
     serialized = BOS_TOKEN + body
     assert_single_leading_bos_text(serialized)
     return serialized
+
+
+def separate_gemma_parser_input(raw: str) -> dict[str, Any]:
+    """Copy the decoded continuation and drop one terminal turn closer.
+
+    ``<turn|>`` is the turn delimiter written by serialization v3. Only a
+    suffix of the continuation is transport. An earlier copy stays in the
+    parser input. The returned raw string is the original decode.
+    """
+    if not isinstance(raw, str):
+        raise TypeError("Gemma continuation must be a string")
+    without_trailing_space = raw.rstrip(" \t\r\n")
+    if without_trailing_space.endswith(TURN_END):
+        parser_input = without_trailing_space[: -len(TURN_END)]
+        removed = TURN_END
+    else:
+        parser_input = raw
+        removed = None
+    return {
+        "parser_input": parser_input,
+        "raw": raw,
+        "removed_terminal_marker": removed,
+        "transport_policy": TRANSPORT_POLICY_ID,
+    }
 
 
 def render_serialized_turn(condition: str, text: str) -> str:
@@ -1396,6 +1422,8 @@ def write_smoke_artifacts(
             "generation_state": classified.get("principal_state"),
             "parsed_triples": classified["parsed"]["triples"] if classified.get("parsed") else [],
             "prior_failure": attempt.get("prior_failure"),
+            "removed_terminal_marker": attempt.get("removed_terminal_marker"),
+            "transport_policy": attempt.get("transport_policy"),
             "parse_issues": classified["parsed"]["issues"] if classified.get("parsed") else [],
             "raw": classified.get("raw"),
             "rendered_prompt_sha256": attempt.get("rendered_prompt_sha256"),
@@ -1583,11 +1611,16 @@ def _generate_smoke_attempts(
             contract,
             str(request["condition"]),
         )
+        parse_text = chosen.get("parser_input")
+        if not isinstance(parse_text, str):
+            parse_text = chosen["raw"] if isinstance(chosen["raw"], str) else None
         classified = classify_smoke_output(
-            chosen["raw"] if isinstance(chosen["raw"], str) else None,
+            parse_text,
             state=str(chosen["state"]),
             truncated=chosen["truncated"] is True,
         )
+        if isinstance(chosen.get("raw"), str):
+            classified["raw"] = chosen["raw"]
         if chosen["exception"] and isinstance(classified.get("failure"), dict):
             classified["failure"]["message"] = str(chosen["exception"])
         attempts.append(
@@ -1600,6 +1633,8 @@ def _generate_smoke_attempts(
                 "load_count": 1,
                 "prior_failure": prior,
                 "raw": chosen["raw"],
+                "removed_terminal_marker": chosen.get("removed_terminal_marker"),
+                "transport_policy": chosen.get("transport_policy"),
                 "rendered_prompt_sha256": request["rendered_prompt_sha256"],
                 "serialized_sha256": request["serialized_sha256"],
                 "state": chosen["state"],
@@ -1646,14 +1681,21 @@ def _generate_once(
     if not isinstance(outcome, Mapping) or not isinstance(outcome.get("raw"), str):
         return {
             "exception": "generate did not return text",
+            "parser_input": None,
             "raw": None,
+            "removed_terminal_marker": None,
             "state": "model_execution_error",
+            "transport_policy": None,
             "truncated": False,
         }
+    separated = separate_gemma_parser_input(outcome["raw"])
     return {
         "exception": None,
-        "raw": outcome["raw"],
+        "parser_input": separated["parser_input"],
+        "raw": separated["raw"],
+        "removed_terminal_marker": separated["removed_terminal_marker"],
         "state": "completed",
+        "transport_policy": separated["transport_policy"],
         "truncated": outcome.get("truncated") is True,
     }
 

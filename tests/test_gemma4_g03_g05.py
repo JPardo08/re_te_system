@@ -22,11 +22,14 @@ from re_te_system.controlled_experiment.gemma4 import (
     GemmaPreflightNotAuthorized,
     GemmaRevisionNotApproved,
     GemmaWorkerTimeout,
+    TURN_END,
     persist_g03,
     run_invented_smoke,
+    separate_gemma_parser_input,
     accept_document_records,
     assert_paired_cohort,
     classify_smoke_output,
+    transport_and_parse,
     contrast_c1_minus_c0,
     evaluation_table,
     g04_blockers,
@@ -709,6 +712,174 @@ def test_invented_smoke_loads_once_and_keeps_failures(tmp_path: Path) -> None:
         raise AssertionError("G03 smoke opened G04")
 
 
+def test_terminal_turn_marker_stays_out_of_the_parsed_object(tmp_path: Path) -> None:
+    from re_te_system.parsing.tsv import parse_tsv
+
+    unchanged = "Ava\tDuty\tBlake"
+    same = separate_gemma_parser_input(unchanged)
+    assert same["parser_input"] == unchanged
+    assert same["raw"] == unchanged
+    assert same["removed_terminal_marker"] is None
+    assert same["transport_policy"] == "gemma4-one-terminal-turn-end"
+
+    glued = "Ava\tDuty\tBlake\nCasey\tPrivilege\tDrew<turn|>"
+    separated = separate_gemma_parser_input(glued + "\n")
+    assert separated["raw"] == glued + "\n"
+    assert separated["parser_input"] == "Ava\tDuty\tBlake\nCasey\tPrivilege\tDrew"
+    assert separated["removed_terminal_marker"] == TURN_END
+    assert parse_tsv(glued).triples[-1].object == "Drew<turn|>"
+    parsed = transport_and_parse(separated["parser_input"])
+    assert parsed["issues"] == []
+    assert parsed["triples"][-1]["object"] == "Drew"
+
+    embedded = "Ava\tDuty\tBlake<turn|> still text"
+    kept = separate_gemma_parser_input(embedded)
+    assert kept["parser_input"] == embedded
+    assert kept["removed_terminal_marker"] is None
+    assert parse_tsv(kept["parser_input"]).triples[0].object == "Blake<turn|> still text"
+
+    only_marker = separate_gemma_parser_input("<turn|>")
+    assert only_marker["parser_input"] == ""
+    only_classified = classify_smoke_output(only_marker["parser_input"])
+    assert only_classified["valid_prediction"] is False
+    assert only_classified["parsed"]["triples"] == []
+
+    spaced = separate_gemma_parser_input("Drew <turn|>\n")
+    assert spaced["raw"] == "Drew <turn|>\n"
+    assert spaced["parser_input"] == "Drew "
+    duplicated = separate_gemma_parser_input("Ava\tDuty\tBlake<turn|><turn|>")
+    assert duplicated["parser_input"] == "Ava\tDuty\tBlake<turn|>"
+    assert parse_tsv(duplicated["parser_input"]).triples[0].object == "Blake<turn|>"
+    malformed = separate_gemma_parser_input("Ava\tDuty<turn|>")
+    malformed_parsed = transport_and_parse(malformed["parser_input"])
+    assert malformed_parsed["triples"] == []
+    assert malformed_parsed["issues"][0]["code"] == "UNPARSEABLE_CHUNK"
+    channeled = "<|channel>thought\nhidden<channel|>Ava\tDuty\tBlake<turn|>"
+    channeled_input = separate_gemma_parser_input(channeled)
+    channeled_parsed = transport_and_parse(channeled_input["parser_input"])
+    assert channeled_parsed["channel"]["status"] == "separated"
+    assert channeled_parsed["triples"] == [
+        {"subject": "Ava", "relation": "Duty", "object": "Blake"}
+    ]
+    assert "hidden" not in json.dumps(channeled_parsed["triples"])
+
+    historical = [
+        (
+            "invented-gemma-01",
+            "C0",
+            "Ava\tnotifies\tBlake\nAva\tnotifies\tone invented duty<turn|>",
+            [
+                ("Ava", "notifies", "Blake"),
+                ("Ava", "notifies", "one invented duty"),
+            ],
+        ),
+        (
+            "invented-gemma-01",
+            "C1",
+            "Ava\tDuty\tone invented duty<turn|>",
+            [("Ava", "Duty", "one invented duty")],
+        ),
+        (
+            "invented-gemma-02",
+            "C0",
+            "Casey\trecords\tone invented privilege\nCasey\trecords\tDrew<turn|>",
+            [
+                ("Casey", "records", "one invented privilege"),
+                ("Casey", "records", "Drew"),
+            ],
+        ),
+        (
+            "invented-gemma-02",
+            "C1",
+            "Casey\trecords\tone invented privilege\nDrew\thas\tone invented privilege<turn|>",
+            [
+                ("Casey", "records", "one invented privilege"),
+                ("Drew", "has", "one invented privilege"),
+            ],
+        ),
+    ]
+    for _document_id, _condition, raw, expected in historical:
+        separated_case = separate_gemma_parser_input(raw)
+        assert separated_case["raw"] == raw
+        assert separated_case["removed_terminal_marker"] == TURN_END
+        assert TURN_END not in separated_case["parser_input"]
+        triples = transport_and_parse(separated_case["parser_input"])["triples"]
+        assert [(item["subject"], item["relation"], item["object"]) for item in triples] == expected
+
+    snapshot = _accepted_snapshot(tmp_path / "models", CANDIDATE_REVISION)
+    raws = [item[2] for item in historical]
+    expected_rows = [item[3] for item in historical]
+    session = _FakeSession([{"raw": raw, "truncated": False} for raw in raws])
+    _smoke_env()
+    try:
+        result = run_invented_smoke(
+            revision=CANDIDATE_REVISION,
+            snapshot_dir=snapshot,
+            allocation_text=L40S_ALLOCATION,
+            session_factory=lambda: session,
+            confirm_device=lambda: "NVIDIA L40S",
+        )
+        assert [item["raw"] for item in result["attempts"]] == raws
+        assert [item["removed_terminal_marker"] for item in result["attempts"]] == [TURN_END] * 4
+        observed = [
+            [
+                (triple["subject"], triple["relation"], triple["object"])
+                for triple in item["classified"]["parsed"]["triples"]
+            ]
+            for item in result["attempts"]
+        ]
+        assert observed == expected_rows
+        assert all(TURN_END not in triple[2] for row in observed for triple in row)
+        assert result["scientific_result"] is False
+        assert result["g04_authorized"] is False
+        written = persist_g03(tmp_path / "transport", result)
+        assert written["statistics"]["scientific_result"] is False
+        assert written["statistics"]["g04_authorized"] is False
+        assert written["manifest"]["report"]["technical_smoke"] is True
+        for condition, rows in (
+            ("C0", expected_rows[0] + expected_rows[2]),
+            ("C1", expected_rows[1] + expected_rows[3]),
+        ):
+            exported_rows = [
+                json.loads(line)
+                for line in (
+                    tmp_path / "transport" / "conditions" / condition / "evaluation_predictions.jsonl"
+                )
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ]
+            assert [
+                (item["subject"], item["relation"], item["object"]) for item in exported_rows
+            ] == rows
+            assert all(TURN_END not in item["object"] for item in exported_rows)
+            assert (
+                tmp_path / "transport" / "conditions" / condition / "withheld_predictions.jsonl"
+            ).read_text(encoding="utf-8") == ""
+        assert "experimental_f1" not in written["statistics"]
+        assert written["manifest"]["gold_inference_authorized"] is False
+        stored = [
+            json.loads(line)
+            for line in (tmp_path / "transport" / "predictions.jsonl").read_text(encoding="utf-8").splitlines()
+        ]
+        assert stored[0]["raw"] == raws[0]
+        assert stored[0]["transport_policy"] == "gemma4-one-terminal-turn-end"
+        assert [item["document_id"] for item in stored] == [
+            "invented-gemma-01",
+            "invented-gemma-01",
+            "invented-gemma-02",
+            "invented-gemma-02",
+        ]
+        assert [item["condition"] for item in stored] == ["C0", "C1", "C0", "C1"]
+    finally:
+        _clear_smoke_env()
+    try:
+        launch_g04({})
+    except GemmaGoldNotAuthorized as exc:
+        assert "g04_phase_lock_closed" in str(exc)
+    else:
+        raise AssertionError("terminal transport opened G04")
+
+
 def _run_all() -> None:
     test_shell_slots_and_paired_documents()
     test_parser_channels_budget_and_retries()
@@ -717,6 +888,7 @@ def _run_all() -> None:
         test_smoke_artifacts_and_g04_closure(Path(directory) / "smoke")
         test_commands_do_not_launch(Path(directory) / "cli")
         test_invented_smoke_loads_once_and_keeps_failures(Path(directory) / "invented")
+        test_terminal_turn_marker_stays_out_of_the_parsed_object(Path(directory) / "transport")
 
 
 if __name__ == "__main__":
