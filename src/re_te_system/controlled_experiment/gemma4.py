@@ -1761,12 +1761,445 @@ def g04_blockers(evidence: Mapping[str, Any]) -> list[str]:
 
 
 def launch_g04(evidence: Mapping[str, Any], loader: Callable[..., Any] | None = None) -> dict[str, Any]:
+    """Production entry. The phase lock stays closed and this function never generates."""
     blockers = g04_blockers(evidence)
     if loader is not None:
         blockers.append("loader_was_offered_to_a_closed_gate")
     if blockers:
         raise GemmaGoldNotAuthorized("; ".join(blockers))
     raise GemmaGoldNotAuthorized("g04_phase_lock_closed")
+
+
+def require_g04_decoding(*, max_new_tokens: int | None, do_sample: bool = False) -> GemmaDecodingContract:
+    """Refuse a missing output budget. The G03 cap of 32 is not a campaign default."""
+    if do_sample is not False:
+        raise GemmaPreflightNotAuthorized("G04 sampling is not the frozen contract")
+    if not isinstance(max_new_tokens, int) or isinstance(max_new_tokens, bool) or max_new_tokens <= 0:
+        raise GemmaPreflightNotAuthorized("G04 output budget is not frozen")
+    return GemmaDecodingContract(
+        max_new_tokens=max_new_tokens,
+        do_sample=False,
+        role="g04_budget_explicit_not_scientific",
+    )
+
+
+def repository_provenance() -> dict[str, Any]:
+    """Git identity of the three Paper 3 checkouts. Missing commits stay unresolved."""
+    from re_te_system.controlled_experiment.dependencies import (
+        SYSTEM_REPO,
+        ensure_package,
+        git_revision,
+        repository_root_from_package,
+    )
+
+    ensure_package("re_te_benchmark", "re_te_benchmark")
+    ensure_package("re_te_evaluation", "re_te_evaluation")
+    roots = {
+        "re_te_benchmark": repository_root_from_package("re_te_benchmark"),
+        "re_te_evaluation": repository_root_from_package("re_te_evaluation"),
+        "re_te_system": SYSTEM_REPO,
+    }
+    return {name: git_revision(root) for name, root in roots.items()}
+
+
+def assert_scientific_tree_is_identified(repositories: Mapping[str, Any]) -> None:
+    """A dirty or unresolved checkout cannot identify a scientific run."""
+    if not isinstance(repositories, Mapping) or not repositories:
+        raise GemmaPreflightNotAuthorized("provenance has no repository identity")
+    for name in ("re_te_system", "re_te_benchmark", "re_te_evaluation"):
+        record = repositories.get(name)
+        if not isinstance(record, Mapping):
+            raise GemmaPreflightNotAuthorized(f"{name} commit is missing")
+        head = record.get("head")
+        if record.get("dirty") is True or record.get("commit_identifies_tree") is not True:
+            raise GemmaPreflightNotAuthorized(
+                f"{name} is dirty or unresolved; a scientific run is refused"
+            )
+        if not isinstance(head, str) or head in {"", "UNRESOLVED"}:
+            raise GemmaPreflightNotAuthorized(f"{name} commit is missing")
+
+
+def snapshot_identity(snapshot_dir: Path) -> dict[str, Any]:
+    """Hash the small identity files. The weight blob is not hashed here."""
+    from re_te_system.manifests.run_manifest import sha256_file
+
+    root = Path(snapshot_dir)
+    identity: dict[str, Any] = {"model_weights_sha256": "not_computed"}
+    for name in ("config.json", "tokenizer_config.json", "generation_config.json", "chat_template.jinja"):
+        path = root / name
+        identity[name] = (
+            {"byte_size": path.stat().st_size, "sha256": sha256_file(path)} if path.is_file() else None
+        )
+    marker = root.parent / "accepted_revision.txt"
+    identity["accepted_revision.txt"] = (
+        {"byte_size": marker.stat().st_size, "sha256": sha256_file(marker)} if marker.is_file() else None
+    )
+    return identity
+
+
+def g04_run_identity(
+    *,
+    repositories: Mapping[str, Any],
+    cohort: Mapping[str, Any],
+    decoding: GemmaDecodingContract,
+    revision: str,
+    snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Fields that change the experiment. Operational metadata stays outside this object."""
+    return {
+        "cohort_documents_sha256": cohort["documents_sha256"],
+        "cohort_text_sha256": list(cohort["text_sha256"]),
+        "conditions": list(PAIRED_CONDITIONS),
+        "decoding": {"do_sample": decoding.do_sample, "max_new_tokens": decoding.max_new_tokens},
+        "document_ids": list(cohort["document_ids"]),
+        "model_id": MODEL_ID,
+        "repositories": {
+            name: {
+                "commit_identifies_tree": record.get("commit_identifies_tree"),
+                "dirty": record.get("dirty"),
+                "head": record.get("head"),
+            }
+            for name, record in sorted(repositories.items())
+        },
+        "request_order": "document_then_c0_then_c1",
+        "revision": revision,
+        "serialization_id": SERIALIZATION_ID,
+        "shell_id": "common-instruction-shell-v2",
+        "snapshot_identity": snapshot,
+        "transport_policy": TRANSPORT_POLICY_ID,
+    }
+
+
+def g04_operational_metadata() -> dict[str, Any]:
+    """Runtime facts that must not change the canonical run id."""
+    libraries: dict[str, str | None] = {}
+    for name in ("torch", "transformers", "torchvision", "pillow"):
+        try:
+            import importlib.metadata as importlib_metadata
+
+            libraries[name] = importlib_metadata.version(name if name != "pillow" else "pillow")
+        except Exception:
+            libraries[name] = None
+    return {
+        "libraries": libraries,
+        "python": sys.version.split()[0],
+        "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
+        "slurm_node": os.environ.get("SLURM_JOB_NODELIST") or os.environ.get("SLURMD_NODENAME"),
+    }
+
+
+def load_g04_cohort(
+    path: Path,
+    *,
+    expected_count: int = EXPECTED_DOCUMENT_COUNT,
+    declared_documents_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Read a documents JSONL. Annotation fields are refused and never returned."""
+    from re_te_system.manifests.run_manifest import sha256_file
+    from re_te_system.runner.run import load_hohfeld_documents
+
+    source = Path(path)
+    refuse_gold_reference(source)
+    if not source.is_file():
+        raise GemmaModelIdentityError(f"cohort file is missing: {source.name}")
+    for line_number, line in enumerate(source.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if not isinstance(row, dict):
+            raise GemmaModelIdentityError(f"cohort row {line_number} is not an object")
+        if ANNOTATION_KEYS.intersection(row):
+            raise GemmaGoldAccessRefused("annotations cannot be generation input")
+        refuse_gold_reference(row.get("document_id"))
+        refuse_gold_reference(row.get("source_text"))
+    try:
+        records = load_hohfeld_documents(source)
+    except ValueError as exc:
+        raise GemmaGoldAccessRefused("document text is missing") from exc
+    if len(records) != expected_count:
+        raise GemmaModelIdentityError(
+            f"cohort has {len(records)} documents; expected {expected_count}"
+        )
+    identifiers = [record.document_id for record in records]
+    if len(identifiers) != len(set(identifiers)):
+        raise GemmaGoldAccessRefused("document ids are duplicated")
+    for record in records:
+        if not isinstance(record.text, str) or not record.text.strip():
+            raise GemmaGoldAccessRefused("document text is missing")
+    file_hash = sha256_file(source)
+    if declared_documents_sha256 is not None and file_hash != declared_documents_sha256:
+        raise GemmaModelIdentityError("documents file hash does not match the declared cohort identity")
+    return {
+        "count": len(records),
+        "document_ids": identifiers,
+        "documents_sha256": file_hash,
+        "order": "natural_document_id",
+        "records": records,
+        "text_sha256": [sha256_text(record.text) for record in records],
+    }
+
+
+def g04_provenance(
+    *,
+    cohort: Mapping[str, Any],
+    decoding: GemmaDecodingContract,
+    revision: str,
+    snapshot_dir: Path,
+    repositories: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    repos = dict(repositories) if repositories is not None else repository_provenance()
+    snapshot = snapshot_identity(snapshot_dir)
+    identity = g04_run_identity(
+        repositories=repos,
+        cohort=cohort,
+        decoding=decoding,
+        revision=revision,
+        snapshot=snapshot,
+    )
+    from re_te_system.controlled_experiment.contracts import campaign_scientific_id
+
+    return {
+        "identity": identity,
+        "operational": g04_operational_metadata(),
+        "repositories": repos,
+        "run_id": campaign_scientific_id(identity),
+    }
+
+
+def run_g04_paired_core(
+    *,
+    documents_path: Path,
+    snapshot_dir: Path,
+    output_dir: Path,
+    max_new_tokens: int | None,
+    session_factory: Callable[[], Any],
+    revision: str = CANDIDATE_REVISION,
+    expected_count: int = EXPECTED_DOCUMENT_COUNT,
+    declared_documents_sha256: str | None = None,
+    repositories: Mapping[str, Any] | None = None,
+    scientific_execution: bool = False,
+    conditions: Sequence[str] = PAIRED_CONDITIONS,
+) -> dict[str, Any]:
+    """Paired C0/C1 generation for tests. Production launch does not call this.
+
+    ``scientific_execution=True`` is refused before any generation. A
+    synthetic run may record a dirty checkout. This function does not call
+    ``assert_scientific_tree_is_identified``. Scientific publication stays
+    withheld, and the phase lock stays closed.
+    """
+    if G04_PHASE_LOCK is not True:
+        raise GemmaGoldNotAuthorized("G04 phase lock must remain closed in this checkout")
+    if scientific_execution is True:
+        raise GemmaGoldNotAuthorized("G04 scientific execution is not authorized")
+    if tuple(conditions) != PAIRED_CONDITIONS:
+        raise GemmaModelIdentityError("G04 conditions must be C0 then C1")
+    refuse_gold_reference(documents_path)
+    decoding = require_g04_decoding(max_new_tokens=max_new_tokens)
+    cohort = load_g04_cohort(
+        documents_path,
+        expected_count=expected_count,
+        declared_documents_sha256=declared_documents_sha256,
+    )
+    provenance = g04_provenance(
+        cohort=cohort,
+        decoding=decoding,
+        revision=revision,
+        snapshot_dir=snapshot_dir,
+        repositories=repositories,
+    )
+    target = Path(output_dir)
+    assert_g04_directory_available(target)
+    session = session_factory()
+    attempts = _generate_g04_attempts(session, cohort["records"], decoding)
+    written = write_g04_artifacts(
+        target,
+        attempts,
+        provenance=provenance,
+        decoding=decoding,
+        load_count=1,
+    )
+    from re_te_system.controlled_experiment.gemma4_bridge import attach_g04_bridge_view
+
+    written["bridge"] = attach_g04_bridge_view(
+        target,
+        attempts=attempts,
+        cohort=cohort,
+        decoding=decoding,
+        documents_source=documents_path,
+        provenance=provenance,
+        revision=revision,
+    )
+    coverage_path = target / "coverage.json"
+    if coverage_path.is_file():
+        written["coverage"] = json.loads(coverage_path.read_text(encoding="utf-8"))
+    written["attempts"] = attempts
+    return written
+
+
+def _generate_g04_attempts(
+    session: Any,
+    records: Sequence[Any],
+    decoding: GemmaDecodingContract,
+) -> list[dict[str, Any]]:
+    attempts: list[dict[str, Any]] = []
+    for record in records:
+        refuse_gold_reference(record.text)
+        for condition in PAIRED_CONDITIONS:
+            rendered = render_controlled_prompt(condition, record.text)
+            serialized = serialize_text_turn(rendered, enable_thinking=False)
+            official = session.apply_chat_template(
+                [{"role": "user", "content": rendered}],
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=False,
+            )
+            if official != serialized:
+                raise GemmaChannelError(
+                    "the loaded processor template does not match the published 12B reconstruction"
+                )
+            encoded = encode_serialized_turn(session, serialized, return_tensors="pt")
+            chosen, prior, attempt_count = _generate_with_retry(
+                session,
+                encoded,
+                decoding,
+                condition,
+            )
+            parse_text = chosen.get("parser_input")
+            if not isinstance(parse_text, str):
+                parse_text = chosen["raw"] if isinstance(chosen["raw"], str) else None
+            classified = classify_smoke_output(
+                parse_text,
+                state=str(chosen["state"]),
+                truncated=chosen["truncated"] is True,
+            )
+            if isinstance(chosen.get("raw"), str):
+                classified["raw"] = chosen["raw"]
+            attempts.append(
+                {
+                    "attempt_count": attempt_count,
+                    "classified": classified,
+                    "condition": condition,
+                    "document_id": record.document_id,
+                    "exception": chosen["exception"],
+                    "prior_failure": prior,
+                    "raw": chosen["raw"],
+                    "removed_terminal_marker": chosen.get("removed_terminal_marker"),
+                    "rendered_prompt_sha256": sha256_text(rendered),
+                    "serialized_sha256": sha256_text(serialized),
+                    "state": chosen["state"],
+                    "transport_policy": chosen.get("transport_policy"),
+                    "truncated": chosen["truncated"],
+                }
+            )
+    return attempts
+
+
+def assert_g04_directory_available(path: Path) -> None:
+    """Refuse a finished campaign and a foreign partial directory.
+
+    An empty or missing directory can receive one run. A crash that already
+    wrote a file leaves that evidence in place. This function does not delete
+    it and does not resume it.
+    """
+    target = Path(path)
+    if not target.exists():
+        return
+    if not target.is_dir():
+        raise GemmaDuplicatePublication(f"refusing to replace {target}")
+    children = {child.name for child in target.iterdir()}
+    if not children:
+        return
+    complete = {"campaign_manifest.json", "campaign_status.json", "manifest.json"}
+    if complete.intersection(children):
+        raise GemmaDuplicatePublication(f"refusing to overwrite complete campaign {target}")
+    raise GemmaDuplicatePublication(f"refusing to adopt partial campaign directory {target}")
+
+
+def write_g04_artifacts(
+    directory: Path,
+    attempts: Sequence[Mapping[str, Any]],
+    *,
+    provenance: Mapping[str, Any],
+    decoding: GemmaDecodingContract,
+    load_count: int,
+) -> dict[str, Any]:
+    """Write the producer log. The bridge view is a separate projection of the same attempts."""
+    target = Path(directory)
+    assert_g04_directory_available(target)
+    target.mkdir(parents=True, exist_ok=True)
+    predictions: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    coverage: dict[str, dict[str, Any]] = {}
+    for attempt in attempts:
+        classified = attempt["classified"]
+        if not isinstance(classified, Mapping):
+            raise GemmaPreflightNotAuthorized("G04 attempt has no classification")
+        row = {
+            "attempt_count": attempt.get("attempt_count", 1),
+            "condition": attempt["condition"],
+            "document_id": attempt["document_id"],
+            "generation_state": classified.get("principal_state"),
+            "parse_issues": classified["parsed"]["issues"] if classified.get("parsed") else [],
+            "parsed_triples": classified["parsed"]["triples"] if classified.get("parsed") else [],
+            "prior_failure": attempt.get("prior_failure"),
+            "raw": classified.get("raw"),
+            "removed_terminal_marker": attempt.get("removed_terminal_marker"),
+            "rendered_prompt_sha256": attempt.get("rendered_prompt_sha256"),
+            "serialized_sha256": attempt.get("serialized_sha256"),
+            "transport_policy": attempt.get("transport_policy"),
+            "valid_prediction": classified["valid_prediction"],
+        }
+        predictions.append(row)
+        coverage.setdefault(str(attempt["document_id"]), {})[str(attempt["condition"])] = {
+            "generation_state": row["generation_state"],
+            "triple_count": len(row["parsed_triples"]),
+            "valid_prediction": row["valid_prediction"],
+        }
+        if classified["failure"] is not None or classified["valid_prediction"] is not True:
+            failures.append(
+                {
+                    "condition": attempt["condition"],
+                    "document_id": attempt["document_id"],
+                    "kind": (classified["failure"] or {}).get("kind", classified["principal_state"]),
+                    "message": (classified["failure"] or {}).get("message", ""),
+                }
+            )
+    statistics = {
+        "document_count": len(coverage),
+        "empty_generations": sum(1 for item in failures if item["kind"] == "empty_model_output"),
+        "experimental_f1": False,
+        "g04_authorized": False,
+        "gold_inference_authorized": False,
+        "infrastructure_unresolved": sum(
+            1 for item in failures if item["kind"] in RETRYABLE_STATES
+        ),
+        "load_count": load_count,
+        "parse_failures": sum(
+            1
+            for item in failures
+            if item["kind"] not in RETRYABLE_STATES and item["kind"] != "empty_model_output"
+        ),
+        "request_count": len(predictions),
+        "scientific_result": False,
+    }
+    manifest = {
+        "decoding": {"do_sample": decoding.do_sample, "max_new_tokens": decoding.max_new_tokens},
+        "g04_phase_lock": G04_PHASE_LOCK,
+        "gold_inference_authorized": False,
+        "identity": provenance["identity"],
+        "operational": provenance["operational"],
+        "provenance_repositories": provenance["repositories"],
+        "result_role": "gemma4_g04_synthetic_core_not_scientific_f1",
+        "run_id": provenance["run_id"],
+        "scientific_result": False,
+        "stage": "G04",
+    }
+    _write_json(target / "manifest.json", manifest)
+    _write_json(target / "statistics.json", statistics)
+    _write_json(target / "coverage.json", coverage)
+    _write_jsonl(target / "predictions.jsonl", predictions)
+    _write_jsonl(target / "failures.jsonl", failures)
+    return {"coverage": coverage, "manifest": manifest, "statistics": statistics}
 
 
 def scientific_plan() -> dict[str, Any]:
@@ -1916,11 +2349,18 @@ def _level_view(summary: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    from re_te_system.controlled_experiment.persistence import atomic_write_text
+
+    atomic_write_text(
+        path,
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+    )
 
 
 def _write_jsonl(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
-    path.write_text(
+    from re_te_system.controlled_experiment.persistence import atomic_write_text
+
+    atomic_write_text(
+        path,
         "".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in rows),
-        encoding="utf-8",
     )

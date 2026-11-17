@@ -13,12 +13,14 @@ from re_te_system.controlled_experiment.gemma4 import (
     EXPECTED_DOCUMENT_COUNT,
     G03_ENV,
     G04_ENV,
+    G04_PHASE_LOCK,
     SERIALIZATION_ID,
     GemmaAllocationError,
     GemmaChannelError,
     GemmaDuplicatePublication,
     GemmaGoldAccessRefused,
     GemmaGoldNotAuthorized,
+    GemmaModelIdentityError,
     GemmaPreflightNotAuthorized,
     GemmaRevisionNotApproved,
     GemmaWorkerTimeout,
@@ -33,7 +35,12 @@ from re_te_system.controlled_experiment.gemma4 import (
     contrast_c1_minus_c0,
     evaluation_table,
     g04_blockers,
+    assert_scientific_tree_is_identified,
+    g04_run_identity,
     launch_g04,
+    load_g04_cohort,
+    require_g04_decoding,
+    run_g04_paired_core,
     paired_condition_identity,
     same_retry_policy,
     scientific_plan,
@@ -880,6 +887,352 @@ def test_terminal_turn_marker_stays_out_of_the_parsed_object(tmp_path: Path) -> 
         raise AssertionError("terminal transport opened G04")
 
 
+def _cohort_rows(count: int) -> list[dict[str, str]]:
+    return [
+        {"document_id": f"articulo_{index}", "source_text": f"Synthetic statute {index}."}
+        for index in range(count, 0, -1)
+    ]
+
+
+def _write_cohort(directory: Path, rows: list[dict]) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "documents.jsonl"
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    return path
+
+
+def _clean_repositories(head: str) -> dict[str, dict[str, object]]:
+    return {
+        name: {"commit_identifies_tree": True, "dirty": False, "head": head}
+        for name in ("re_te_benchmark", "re_te_evaluation", "re_te_system")
+    }
+
+
+def test_g04_core_covers_a_synthetic_cohort_behind_the_lock(tmp_path: Path) -> None:
+    import hashlib
+
+    assert G04_PHASE_LOCK is True
+    rows = _cohort_rows(36)
+    documents = _write_cohort(tmp_path / "cohort-36", rows)
+    digest = hashlib.sha256(documents.read_bytes()).hexdigest()
+    cohort = load_g04_cohort(documents, declared_documents_sha256=digest)
+    assert cohort["count"] == 36
+    assert cohort["document_ids"][0] == "articulo_1"
+    assert cohort["document_ids"][1] == "articulo_2"
+    assert cohort["document_ids"][9] == "articulo_10"
+    assert len(set(cohort["document_ids"])) == 36
+    duplicate = _write_cohort(
+        tmp_path / "duplicate",
+        [{"document_id": "articulo_1", "source_text": "One."}, {"document_id": "articulo_1", "source_text": "Two."}],
+    )
+    try:
+        load_g04_cohort(duplicate, expected_count=2)
+    except GemmaGoldAccessRefused:
+        pass
+    else:
+        raise AssertionError("duplicate document id was accepted")
+    missing = _write_cohort(tmp_path / "missing", [{"document_id": "articulo_1"}])
+    try:
+        load_g04_cohort(missing, expected_count=1)
+    except GemmaGoldAccessRefused:
+        pass
+    else:
+        raise AssertionError("missing source text was accepted")
+    annotated = _write_cohort(
+        tmp_path / "annotated",
+        [{"document_id": "articulo_1", "source_text": "One.", "annotations": []}],
+    )
+    try:
+        load_g04_cohort(annotated, expected_count=1)
+    except GemmaGoldAccessRefused:
+        pass
+    else:
+        raise AssertionError("annotation field was accepted")
+    leaked = _write_cohort(
+        tmp_path / "leaked",
+        [{"document_id": "articulo_1", "source_text": "see teresia_hohfeld"}],
+    )
+    try:
+        load_g04_cohort(leaked, expected_count=1)
+    except GemmaGoldAccessRefused:
+        pass
+    else:
+        raise AssertionError("gold marker in source text was accepted")
+    try:
+        load_g04_cohort(documents, declared_documents_sha256="0" * 64)
+    except GemmaModelIdentityError:
+        pass
+    else:
+        raise AssertionError("wrong cohort hash was accepted")
+
+    snapshot = _accepted_snapshot(tmp_path / "models", CANDIDATE_REVISION)
+    loads: list[int] = []
+
+    def factory(session: _FakeSession):
+        def load() -> _FakeSession:
+            loads.append(1)
+            return session
+
+        return load
+
+    clean = _clean_repositories("a" * 40)
+    session = _FakeSession([{"raw": "Ava\tDuty\tBlake<turn|>", "truncated": False}] * 72)
+    result = run_g04_paired_core(
+        documents_path=documents,
+        snapshot_dir=snapshot,
+        output_dir=tmp_path / "campaign",
+        max_new_tokens=40,
+        session_factory=factory(session),
+        declared_documents_sha256=digest,
+        repositories=clean,
+    )
+    assert loads == [1]
+    assert session.generated == 72
+    assert session.policies == [(False, 40)] * 72
+    assert result["statistics"]["document_count"] == 36
+    assert result["statistics"]["request_count"] == 72
+    assert result["statistics"]["load_count"] == 1
+    assert result["statistics"]["scientific_result"] is False
+    assert result["statistics"]["g04_authorized"] is False
+    assert result["statistics"]["experimental_f1"] is False
+    assert result["manifest"]["g04_phase_lock"] is True
+    assert result["manifest"]["decoding"] == {"do_sample": False, "max_new_tokens": 40}
+    assert result["manifest"]["identity"]["snapshot_identity"]["model_weights_sha256"] == "not_computed"
+    order = [
+        (json.loads(line)["document_id"], json.loads(line)["condition"])
+        for line in (tmp_path / "campaign" / "predictions.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert order[0] == ("articulo_1", "C0")
+    assert order[1] == ("articulo_1", "C1")
+    assert order[18] == ("articulo_10", "C0")
+    assert len(order) == 72
+    stored = [
+        json.loads(line)
+        for line in (tmp_path / "campaign" / "predictions.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert stored[0]["raw"].endswith("<turn|>")
+    assert stored[0]["parsed_triples"][0]["object"] == "Blake"
+    assert stored[0]["removed_terminal_marker"] == "<turn|>"
+    assert "experimental_f1" not in result["manifest"]["identity"]
+    for condition in ("C0", "C1"):
+        exported = (
+            tmp_path / "campaign" / "conditions" / condition / "evaluation_predictions.jsonl"
+        ).read_text(encoding="utf-8")
+        assert "<turn|>" not in exported
+        assert (
+            tmp_path / "campaign" / "conditions" / condition / "withheld_predictions.jsonl"
+        ).read_text(encoding="utf-8") == ""
+    try:
+        run_g04_paired_core(
+            documents_path=documents,
+            snapshot_dir=snapshot,
+            output_dir=tmp_path / "campaign",
+            max_new_tokens=40,
+            session_factory=factory(_FakeSession([])),
+            repositories=clean,
+        )
+    except GemmaDuplicatePublication:
+        pass
+    else:
+        raise AssertionError("existing campaign directory was overwritten")
+    assert loads == [1]
+
+    one = _write_cohort(tmp_path / "one", _cohort_rows(1))
+    retried = _FakeSession(
+        [GemmaWorkerTimeout("budget"), {"raw": "Ava\tDuty\tBlake", "truncated": False}, {"raw": "Ava\tDuty\tBlake", "truncated": False}]
+    )
+    retried_result = run_g04_paired_core(
+        documents_path=one,
+        snapshot_dir=snapshot,
+        output_dir=tmp_path / "retry",
+        max_new_tokens=40,
+        session_factory=factory(retried),
+        expected_count=1,
+        repositories=clean,
+    )
+    assert retried.generated == 3
+    assert retried_result["attempts"][0]["attempt_count"] == 2
+    assert retried_result["attempts"][0]["prior_failure"]["state"] == "timeout"
+
+    semantic = _FakeSession(
+        [RuntimeError("parse internally"), {"raw": "Ava\tDuty\tBlake", "truncated": False}]
+    )
+    semantic_result = run_g04_paired_core(
+        documents_path=one,
+        snapshot_dir=snapshot,
+        output_dir=tmp_path / "semantic",
+        max_new_tokens=40,
+        session_factory=factory(semantic),
+        expected_count=1,
+        repositories=clean,
+    )
+    assert semantic.generated == 2
+    assert semantic_result["attempts"][0]["attempt_count"] == 1
+    assert semantic_result["attempts"][0]["state"] == "model_execution_error"
+
+    exhausted = _FakeSession(
+        [GemmaWorkerTimeout("budget"), GemmaWorkerTimeout("budget"), {"raw": "Ava\tDuty\tBlake", "truncated": False}]
+    )
+    exhausted_result = run_g04_paired_core(
+        documents_path=one,
+        snapshot_dir=snapshot,
+        output_dir=tmp_path / "exhausted",
+        max_new_tokens=40,
+        session_factory=factory(exhausted),
+        expected_count=1,
+        repositories=clean,
+    )
+    assert exhausted.generated == 3
+    assert exhausted_result["attempts"][0]["attempt_count"] == 2
+    assert exhausted_result["attempts"][0]["exception"]
+
+    empty = _FakeSession(
+        [{"raw": "", "truncated": False}, {"raw": "Ava\tDuty\tBlake", "truncated": False}]
+    )
+    empty_result = run_g04_paired_core(
+        documents_path=one,
+        snapshot_dir=snapshot,
+        output_dir=tmp_path / "empty",
+        max_new_tokens=40,
+        session_factory=factory(empty),
+        expected_count=1,
+        repositories=clean,
+    )
+    assert empty.generated == 2
+    assert empty_result["attempts"][0]["classified"]["failure"]["kind"] == "empty_model_output"
+    assert empty_result["statistics"]["empty_generations"] == 1
+
+    broken = _FakeSession(
+        [{"raw": "not tsv", "truncated": False}, {"raw": "Ava\tDuty\tBlake", "truncated": False}]
+    )
+    broken_result = run_g04_paired_core(
+        documents_path=one,
+        snapshot_dir=snapshot,
+        output_dir=tmp_path / "malformed",
+        max_new_tokens=40,
+        session_factory=factory(broken),
+        expected_count=1,
+        repositories=clean,
+    )
+    assert broken_result["attempts"][0]["classified"]["parsed"]["triples"] == []
+    assert broken_result["attempts"][0]["attempt_count"] == 1
+
+    limited = _FakeSession(
+        [{"raw": "Ava\tDuty\tBlake", "truncated": True}, {"raw": "Ava\tDuty\tBlake", "truncated": False}]
+    )
+    limited_result = run_g04_paired_core(
+        documents_path=one,
+        snapshot_dir=snapshot,
+        output_dir=tmp_path / "truncated",
+        max_new_tokens=40,
+        session_factory=factory(limited),
+        expected_count=1,
+        repositories=clean,
+    )
+    assert limited_result["attempts"][0]["classified"]["valid_prediction"] is False
+    assert limited_result["attempts"][0]["raw"] == "Ava\tDuty\tBlake"
+
+    calls = {"n": 0}
+
+    def counting() -> _FakeSession:
+        calls["n"] += 1
+        return _FakeSession([])
+
+    try:
+        run_g04_paired_core(
+            documents_path=one,
+            snapshot_dir=snapshot,
+            output_dir=tmp_path / "no-budget",
+            max_new_tokens=None,
+            session_factory=counting,
+            expected_count=1,
+            repositories=clean,
+        )
+    except GemmaPreflightNotAuthorized as exc:
+        assert "not frozen" in str(exc)
+    else:
+        raise AssertionError("missing output budget was accepted")
+    assert calls["n"] == 0
+    try:
+        run_g04_paired_core(
+            documents_path=one,
+            snapshot_dir=snapshot,
+            output_dir=tmp_path / "other-conditions",
+            max_new_tokens=40,
+            session_factory=counting,
+            expected_count=1,
+            repositories=clean,
+            conditions=("C0", "C2"),
+        )
+    except GemmaModelIdentityError:
+        pass
+    else:
+        raise AssertionError("a non-C0/C1 pair was accepted")
+    assert calls["n"] == 0
+
+    other = _clean_repositories("b" * 40)
+    first_id = result["manifest"]["run_id"]
+    second = run_g04_paired_core(
+        documents_path=documents,
+        snapshot_dir=snapshot,
+        output_dir=tmp_path / "other-commit",
+        max_new_tokens=40,
+        session_factory=factory(_FakeSession([{"raw": "Ava\tDuty\tBlake", "truncated": False}] * 72)),
+        declared_documents_sha256=digest,
+        repositories=other,
+    )
+    assert second["manifest"]["run_id"] != first_id
+    saved_job = os.environ.get("SLURM_JOB_ID")
+    os.environ["SLURM_JOB_ID"] = "1371459"
+    try:
+        with_job = run_g04_paired_core(
+            documents_path=documents,
+            snapshot_dir=snapshot,
+            output_dir=tmp_path / "same-identity",
+            max_new_tokens=40,
+            session_factory=factory(_FakeSession([{"raw": "Ava\tDuty\tBlake", "truncated": False}] * 72)),
+            declared_documents_sha256=digest,
+            repositories=clean,
+        )
+    finally:
+        if saved_job is None:
+            os.environ.pop("SLURM_JOB_ID", None)
+        else:
+            os.environ["SLURM_JOB_ID"] = saved_job
+    assert with_job["manifest"]["run_id"] == first_id
+    assert with_job["manifest"]["operational"]["slurm_job_id"] == "1371459"
+    dirty = _clean_repositories("a" * 40)
+    dirty["re_te_system"] = {"commit_identifies_tree": False, "dirty": True, "head": "a" * 40}
+    try:
+        assert_scientific_tree_is_identified(dirty)
+    except GemmaPreflightNotAuthorized as exc:
+        assert "dirty" in str(exc)
+    else:
+        raise AssertionError("dirty scientific tree was accepted")
+    try:
+        run_g04_paired_core(
+            documents_path=one,
+            snapshot_dir=snapshot,
+            output_dir=tmp_path / "scientific",
+            max_new_tokens=40,
+            session_factory=counting,
+            expected_count=1,
+            repositories=clean,
+            scientific_execution=True,
+        )
+    except GemmaGoldNotAuthorized:
+        pass
+    else:
+        raise AssertionError("scientific execution was accepted")
+    assert calls["n"] == 0
+    try:
+        launch_g04({})
+    except GemmaGoldNotAuthorized as exc:
+        assert "g04_phase_lock_closed" in str(exc)
+    else:
+        raise AssertionError("phase lock allowed production launch")
+
+
 def _run_all() -> None:
     test_shell_slots_and_paired_documents()
     test_parser_channels_budget_and_retries()
@@ -889,6 +1242,7 @@ def _run_all() -> None:
         test_commands_do_not_launch(Path(directory) / "cli")
         test_invented_smoke_loads_once_and_keeps_failures(Path(directory) / "invented")
         test_terminal_turn_marker_stays_out_of_the_parsed_object(Path(directory) / "transport")
+        test_g04_core_covers_a_synthetic_cohort_behind_the_lock(Path(directory) / "g04")
 
 
 if __name__ == "__main__":

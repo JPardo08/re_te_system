@@ -1898,7 +1898,7 @@
       "block_reasons": [
         {
           "code": "gold_inference_closed",
-          "evidence": "G04_PHASE_LOCK is closed. Accredited G02 and G03 reports are absent. The identity pin does not open Gold."
+          "evidence": "G04_PHASE_LOCK is closed. A fake session can project a bridge directory, and production launch still refuses. The output budget is not frozen. The weight hash is not computed. The identity pin does not open Gold."
         }
       ],
       "training": false,
@@ -1959,7 +1959,7 @@
       "block_reasons": [
         {
           "code": "scientific_publication_withheld",
-          "evidence": "G05 can score supplied files, but this checkout does not treat those numbers as a campaign result."
+          "evidence": "The evaluation bridge can score a synthetic G04 projection, and it keeps the bridge publication labels. This checkout does not treat those numbers as a scientific campaign result."
         }
       ],
       "training": false,
